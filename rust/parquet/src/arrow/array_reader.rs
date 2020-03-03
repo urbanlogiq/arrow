@@ -680,6 +680,18 @@ where
     .build_array_reader()
 }
 
+/// list type is a special case of struct type (see https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
+fn is_list_type(cur_type: Rc<Type>) -> bool {
+    let fields = cur_type.get_fields();
+    if cur_type.is_group() && cur_type.get_basic_info().has_repetition() && cur_type.name() == "list" && fields.len() == 1 {
+        let field = &fields[0];
+        if field.name() == "item" && field.get_basic_info().has_repetition() && field.is_primitive() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Used to build array reader.
 struct ArrayReaderBuilder {
     root_schema: TypePtr,
@@ -712,8 +724,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     for ArrayReaderBuilder
 {
     /// Build array reader for primitive type.
-    /// Currently we don't have a list reader implementation, so repeated type is not
-    /// supported yet.
     fn visit_primitive(
         &mut self,
         cur_type: TypePtr,
@@ -736,8 +746,8 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
 
             let reader =
                 self.build_for_primitive_type_inner(cur_type.clone(), &new_context)?;
-
             if cur_type.get_basic_info().repetition() == Repetition::REPEATED {
+
                 Err(ArrowError(
                     "Reading repeated field is not supported yet!".to_string(),
                 ))
@@ -774,6 +784,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         if let Some(reader) = self.build_for_struct_type_inner(&cur_type, &new_context)? {
             if cur_type.get_basic_info().has_repetition()
                 && cur_type.get_basic_info().repetition() == Repetition::REPEATED
+                && !is_list_type(cur_type)
             {
                 Err(ArrowError(
                     "Reading repeated field is not supported yet!".to_string(),
@@ -799,16 +810,14 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     }
 
     /// Build array reader for list type.
-    /// Currently this is not supported.
+    /// List type is a special case of struct type (see https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
     fn visit_list_with_item(
         &mut self,
         _list_type: Rc<Type>,
         _item_type: &Type,
         _context: &'a ArrayReaderBuilderContext,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
-        Err(ArrowError(
-            "Reading parquet list array into arrow is not supported yet!".to_string(),
-        ))
+        return self.visit_struct(_list_type, _context);
     }
 }
 
@@ -959,7 +968,7 @@ mod tests {
     use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
     use crate::util::test_common::page_util::InMemoryPageIterator;
     use crate::util::test_common::{get_test_file, make_pages};
-    use arrow::array::{Array, ArrayRef, PrimitiveArray, StructArray};
+    use arrow::array::{Array, ArrayRef, PrimitiveArray, StructArray, ListArray};
     use arrow::datatypes::{
         DataType as ArrowType, Field, Int32Type as ArrowInt32, UInt32Type as ArrowUInt32,
         UInt64Type as ArrowUInt64,
@@ -1408,5 +1417,37 @@ mod tests {
         )]);
 
         assert_eq!(array_reader.get_data_type(), &arrow_type);
+    }
+
+    #[test]
+    fn test_create_array_reader_with_list() {
+        let file = get_test_file("int_array_test_file.parquet");
+        let file_reader = Rc::new(SerializedFileReader::new(file).unwrap());
+        let mut array_reader = build_array_reader(
+            file_reader.metadata().file_metadata().schema_descr_ptr(),
+            vec![0usize].into_iter(),
+            file_reader,
+        )
+        .unwrap();
+
+        // lists are represented as structs containing a single optional field named "list",
+        // which contains a single repeated field called "item"
+        let item_field = Field::new("item", ArrowType::Int64, true);
+        let list_field = Field::new("list", ArrowType::Struct(vec![item_field]), true);
+        let arrow_type = ArrowType::Struct(vec![Field::new(
+            "int_array",
+            ArrowType::Struct(vec![list_field]),
+            true,
+        )]);
+
+        assert_eq!(array_reader.get_data_type(), &arrow_type);
+        let array = array_reader.next_batch(10).unwrap();
+        // let array = array
+        //     .as_any()
+        //     .downcast_ref::<ListArray>()
+        //     .unwrap();
+
+        println!("array: {:?}", array);
+
     }
 }
