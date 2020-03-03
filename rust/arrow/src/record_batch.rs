@@ -33,53 +33,25 @@ pub struct RecordBatch {
     schema: Arc<Schema>,
     columns: Vec<Arc<Array>>,
 }
-//
-// let fields = struct_type.get_fields();
-// if struct_type.is_group() && struc_type.get_basic_info().has_repetition() && struct_type.name() == "list" && fields.len() == 1 {
-//     let field = &fields[0];
-//     if field.name() == "item" && field.get_basic_info().has_repetition() && field.is_primitive() {
-//         match list_type {
-//             DataType::List(x) => {
-//                 match x {
-//                     Box(y)
-//                 }
-//                 if x == list_type {
-//                     return true;
-//                 }
-//             },
-//             _ => return false;
-//         }
-//     }
-// }
-// false
+
 /// list type is a special case of struct type (see https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
 fn is_struct_equivalent_of_list_type(col_type: &DataType, schema_type: &DataType) -> bool {
-    match col_type {
-        DataType::Struct(fields) => {
-            if fields.len() != 1 || fields[0].name() != "list" {
+    if let DataType::Struct(fields) = col_type {
+        if fields.len() != 1 || fields[0].name() != "list" {
+            return false;
+        }
+        if let DataType::Struct(inner_fields) = fields[0].data_type() {
+            if inner_fields.len() != 1 || inner_fields[0].name() != "item" {
                 return false;
             }
-            match fields[0].data_type() {
-                DataType::Struct(inner_fields) => {
-                    if inner_fields.len() != 1 || inner_fields[0].name() != "item" {
-                        return false;
-                    }
-                    match schema_type {
-                        DataType::List(x) => {
-                            if *inner_fields[0].data_type() == **x {
-                                return true;
-                            } else {
-                                return false;
-                            }
-                        },
-                        _ => false
-                    }
-                },
-                _ => false
+            if let DataType::List(x) = schema_type {
+                if *inner_fields[0].data_type() == **x {
+                    return true;
+                }
             }
-        },
-        _ => false
+        }
     }
+    return false;
 }
 
 impl RecordBatch {
