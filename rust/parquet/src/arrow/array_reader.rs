@@ -530,13 +530,23 @@ impl ArrayReader for ListArrayReader {
         //     _ => return Err(ParquetError::General("list array reader operating on non-list type".to_string()))
         // };
 
+
         let next_batch_array = self.item_reader.next_batch(batch_size).unwrap();
+        if next_batch_array.len() == 0 {
+            self.def_level_buffer = None;
+            self.rep_level_buffer = None;
+            let value_data = ArrayData::builder(ArrowType::Int64)
+                .len(0)
+                .build();
+            return Ok(Arc::new(ListArray::from(value_data)));
+        }
         println!("next batch array: {:?}", next_batch_array);
         println!("\nnext batch array len: {:?}\n", next_batch_array.len());
         // let item_array = self.item_reader.next_batch(batch_size);
         // println!("item array: {:?}", item_array);
         let def_levels = self.item_reader.get_def_levels().unwrap();
         let rep_levels = self.item_reader.get_rep_levels().unwrap();
+
 
         // println!("item def_levels: {:?}, item rep_levels: {:?}", def_levels, rep_levels);
         // println!("list def_levels: {:?}, list rep_levels: {:?}", self.get_def_levels(), self.get_rep_levels());
@@ -1616,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_array_reader() {
+    fn test_create_array_reader_with_nulls() {
         let file = get_test_file("nulls.snappy.parquet");
         let file_reader = Rc::new(SerializedFileReader::new(file).unwrap());
 
@@ -1635,11 +1645,18 @@ mod tests {
         )]);
 
         assert_eq!(array_reader.get_data_type(), &arrow_type);
+        let array = array_reader.next_batch(1024).unwrap();
+        // let array = array
+        //     .as_any()
+        //     .downcast_ref::<ListArray>()
+        //     .unwrap();
+
+        println!("array: {:?}", array);
     }
 
     #[test]
     fn test_create_array_reader_with_list() {
-        let file = get_test_file("int_array_test_file.parquet");
+        let file = get_test_file("tiny_int_array.parquet");
         let file_reader = Rc::new(SerializedFileReader::new(file).unwrap());
         let mut array_reader = build_array_reader(
             file_reader.metadata().file_metadata().schema_descr_ptr(),
