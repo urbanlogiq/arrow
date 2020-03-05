@@ -924,7 +924,9 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         if self.is_included(cur_type.as_ref()) {
             let mut new_context = context.clone();
-            new_context.path.append(vec![cur_type.name().to_string()]);
+            if cur_type.name().to_string() != "item" {
+                new_context.path.append(vec![cur_type.name().to_string()]);
+            }
             println!("path in primitive: {:?}", new_context.path);
             match cur_type.get_basic_info().repetition() {
                 Repetition::REPEATED => {
@@ -1012,7 +1014,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         let list_child = &list_type.get_fields()[0];
         let item_child = &list_child.get_fields()[0];
 
-        new_context.path.append(vec![list_type.name().to_string(), list_child.name().to_string()]);
+        new_context.path.append(vec![list_type.name().to_string()]);
         println!("path in visit list with item: {:?}", new_context.path);
 
         match list_type.get_basic_info().repetition() {
