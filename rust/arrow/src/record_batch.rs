@@ -35,24 +35,24 @@ pub struct RecordBatch {
 }
 
 /// list type is a special case of struct type (see https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
-fn is_struct_equivalent_of_list_type(col_type: &DataType, schema_type: &DataType) -> bool {
-    if let DataType::Struct(fields) = col_type {
-        if fields.len() != 1 || fields[0].name() != "list" {
-            return false;
-        }
-        if let DataType::Struct(inner_fields) = fields[0].data_type() {
-            if inner_fields.len() != 1 || inner_fields[0].name() != "item" {
-                return false;
-            }
-            if let DataType::List(x) = schema_type {
-                if *inner_fields[0].data_type() == **x {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
+// fn is_struct_equivalent_of_list_type(col_type: &DataType, schema_type: &DataType) -> bool {
+//     if let DataType::Struct(fields) = col_type {
+//         if fields.len() != 1 || fields[0].name() != "list" {
+//             return false;
+//         }
+//         if let DataType::Struct(inner_fields) = fields[0].data_type() {
+//             if inner_fields.len() != 1 || inner_fields[0].name() != "item" {
+//                 return false;
+//             }
+//             if let DataType::List(x) = schema_type {
+//                 if *inner_fields[0].data_type() == **x {
+//                     return true;
+//                 }
+//             }
+//         }
+//     }
+//     return false;
+// }
 
 impl RecordBatch {
     /// Creates a `RecordBatch` from a schema and columns
@@ -86,7 +86,7 @@ impl RecordBatch {
                     "all columns in a record batch must have the same length".to_string(),
                 ));
             }
-            if columns[i].data_type() != schema.field(i).data_type() && !is_struct_equivalent_of_list_type(columns[i].data_type(), schema.field(i).data_type()) {
+            if columns[i].data_type() != schema.field(i).data_type() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "column types must match schema types, expected {:?} but found {:?} at column index {}",
                     schema.field(i).data_type(),
