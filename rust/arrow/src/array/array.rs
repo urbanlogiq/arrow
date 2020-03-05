@@ -775,19 +775,29 @@ impl From<Vec<Option<bool>>> for BooleanArray {
 /// Constructs a `PrimitiveArray` from an array data reference.
 impl<T: ArrowPrimitiveType> From<ArrayDataRef> for PrimitiveArray<T> {
     default fn from(data: ArrayDataRef) -> Self {
-        assert_eq!(
-            data.buffers().len(),
-            1,
-            "PrimitiveArray data should contain a single buffer only (values buffer)"
-        );
-        let raw_values = data.buffers()[0].raw_data();
-        assert!(
-            memory::is_aligned::<u8>(raw_values, mem::align_of::<T::Native>()),
-            "memory is not aligned"
-        );
-        Self {
-            data,
-            raw_values: RawPtrBox::new(raw_values as *const T::Native),
+        // TO DO: FIX THIS
+        if data.buffers().len() == 0 {
+            let empty_byte_array: Vec<u8> = [].to_vec();
+            let raw_value_offsets = Buffer::from(&empty_byte_array).raw_data();
+            Self {
+                data,
+                raw_values: RawPtrBox::new(raw_value_offsets as *const T::Native),
+            }
+        } else {
+            assert_eq!(
+                data.buffers().len(),
+                1,
+                "PrimitiveArray data should contain a single buffer only (values buffer)"
+            );
+            let raw_values = data.buffers()[0].raw_data();
+            assert!(
+                memory::is_aligned::<u8>(raw_values, mem::align_of::<T::Native>()),
+                "memory is not aligned"
+            );
+            Self {
+                data,
+                raw_values: RawPtrBox::new(raw_values as *const T::Native),
+            }
         }
     }
 }
@@ -879,31 +889,45 @@ impl ListArray {
 /// Constructs a `ListArray` from an array data reference.
 impl From<ArrayDataRef> for ListArray {
     fn from(data: ArrayDataRef) -> Self {
-        assert_eq!(
-            data.buffers().len(),
-            1,
-            "ListArray data should contain a single buffer only (value offsets)"
-        );
-        assert_eq!(
-            data.child_data().len(),
-            1,
-            "ListArray should contain a single child array (values array)"
-        );
-        let values = make_array(data.child_data()[0].clone());
-        let raw_value_offsets = data.buffers()[0].raw_data();
-        assert!(
-            memory::is_aligned(raw_value_offsets, mem::align_of::<i32>()),
-            "memory is not aligned"
-        );
-        let value_offsets = raw_value_offsets as *const i32;
-        unsafe {
-            assert_eq!(*value_offsets.offset(0), 0, "offsets do not start at zero");
+        // TODO: PROPER CHECKS FOR THESE BAD ASSUMPTIONS
+        // assert_eq!(
+        //     data.buffers().len(),
+        //     1,
+        //     "ListArray data should contain a single buffer only (value offsets)"
+        // );
+        // assert_eq!(
+        //     data.child_data().len(),
+        //     1,
+        //     "ListArray should contain a single child array (values array)"
+        // );
+        if data.buffers().len() == 1 {
+            let values = make_array(data.child_data()[0].clone());
+            let raw_value_offsets = data.buffers()[0].raw_data();
+            assert!(
+                memory::is_aligned(raw_value_offsets, mem::align_of::<i32>()),
+                "memory is not aligned"
+            );
+            let value_offsets = raw_value_offsets as *const i32;
+            unsafe {
+                assert_eq!(*value_offsets.offset(0), 0, "offsets do not start at zero");
+            }
+            Self {
+                data: data.clone(),
+                values,
+                value_offsets: RawPtrBox::new(value_offsets),
+            }
+        } else { // TO DO: FIX THIS CONDITION
+            let values = make_array(data.clone());
+            let empty_byte_array: Vec<u8> = [].to_vec();
+            let raw_value_offsets = Buffer::from(&empty_byte_array).raw_data();
+            let value_offsets = raw_value_offsets as *const i32;
+            Self {
+                data: data.clone(),
+                values,
+                value_offsets: RawPtrBox::new(value_offsets),
+            }
         }
-        Self {
-            data: data.clone(),
-            values,
-            value_offsets: RawPtrBox::new(value_offsets),
-        }
+
     }
 }
 
