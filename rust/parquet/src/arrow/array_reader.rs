@@ -535,10 +535,21 @@ impl ArrayReader for ListArrayReader {
         if next_batch_array.len() == 0 {
             self.def_level_buffer = None;
             self.rep_level_buffer = None;
+            let empty_buffer: Vec<u8> = Vec::new();
             let value_data = ArrayData::builder(ArrowType::Int64)
                 .len(0)
+                .add_buffer(Buffer::from(empty_buffer.to_byte_slice()))
                 .build();
-            return Ok(Arc::new(ListArray::from(value_data)));
+
+            let value_offsets = Buffer::from(vec![0].to_byte_slice());
+
+            let list_data = ArrayData::builder(self.get_data_type().clone())
+                .len(0)
+                .add_buffer(value_offsets.clone())
+                .add_child_data(value_data)
+                .build();
+
+            return Ok(Arc::new(ListArray::from(list_data)));
         }
         println!("next batch array: {:?}", next_batch_array);
         println!("\nnext batch array len: {:?}\n", next_batch_array.len());
@@ -692,7 +703,7 @@ impl ArrayReader for StructArrayReader {
             .iter_mut()
             .map(|reader| reader.next_batch(batch_size))
             .map(|batch| {
-                println!("batch: {:?}", batch);
+                // println!("batch: {:?}", batch);
                 return batch;
             })
             .try_fold(
@@ -702,7 +713,7 @@ impl ArrayReader for StructArrayReader {
                     Ok(result)
                 },
             )?;
-        println!("children array: {:?}", children_array);
+        // println!("children array: {:?}", children_array);
         // check that array child data has same size
         let children_array_len =
             children_array.first().map(|arr| arr.len()).ok_or_else(|| {
@@ -1676,7 +1687,7 @@ mod tests {
         // )]);
         //
         // assert_eq!(array_reader.get_data_type(), &arrow_type);
-        let array = array_reader.next_batch(1024).unwrap();
+        let array = array_reader.next_batch(0).unwrap();
         // let array = array
         //     .as_any()
         //     .downcast_ref::<ListArray>()
@@ -1707,7 +1718,7 @@ mod tests {
         // )]);
         //
         // assert_eq!(array_reader.get_data_type(), &arrow_type);
-        let array = array_reader.next_batch(1024).unwrap();
+        let array = array_reader.next_batch(0).unwrap();
         // let array = array
         //     .as_any()
         //     .downcast_ref::<ListArray>()
