@@ -560,26 +560,26 @@ impl ArrayReader for ListArrayReader {
         let rep_levels = self.item_reader.get_rep_levels().unwrap();
 
 
-        // // println!("item def_levels: {:?}, item rep_levels: {:?}", def_levels, rep_levels);
-        // // println!("list def_levels: {:?}, list rep_levels: {:?}", self.get_def_levels(), self.get_rep_levels());
-        //
-        // // check that array child data has same size
-        // // let array_ref_next_batch: ArrayRef = next_batch_array;
-        // let children_array_len = next_batch_array.len();
-        // // calculate struct def level data
-        // let buffer_size = children_array_len * size_of::<i16>();
-        // let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
-        // def_level_data_buffer.resize(buffer_size)?;
-        //
-        // let def_level_data = unsafe {
-        //     let ptr = transmute::<*const u8, *mut i16>(def_level_data_buffer.raw_data());
-        //     from_raw_parts_mut(ptr, children_array_len)
-        // };
-        //
-        // def_level_data
-        //     .iter_mut()
-        //     .for_each(|v| *v = self.list_def_level);
-        //
+        println!("item def_levels: {:?}, item rep_levels: {:?}", def_levels, rep_levels);
+        println!("list def_levels: {:?}, list rep_levels: {:?}", self.get_def_levels(), self.get_rep_levels());
+
+        // check that array child data has same size
+        // let array_ref_next_batch: ArrayRef = next_batch_array;
+        let children_array_len = next_batch_array.len();
+        // calculate struct def level data
+        let buffer_size = children_array_len * size_of::<i16>();
+        let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
+        def_level_data_buffer.resize(buffer_size)?;
+
+        let def_level_data = unsafe {
+            let ptr = transmute::<*const u8, *mut i16>(def_level_data_buffer.raw_data());
+            from_raw_parts_mut(ptr, children_array_len)
+        };
+
+        def_level_data
+            .iter_mut()
+            .for_each(|v| *v = self.list_def_level);
+
         // let list_depth = 1;
         // let values_depth_level = def_levels[0];
 
@@ -604,13 +604,14 @@ impl ArrayReader for ListArrayReader {
             .add_child_data(value_data)
             .build();
 
-        // let rep_levels = self.item_reader.get_rep_levels().unwrap();
-        // let mut buffer = Int16BufferBuilder::new(children_array_len);
-        // buffer.append_slice(rep_levels)?;
-        // let rep_level_data = Some(buffer.finish());
-        //
-        // self.def_level_buffer = Some(def_level_data_buffer.freeze());
-        // self.rep_level_buffer = rep_level_data;
+
+        let rep_levels = self.item_reader.get_rep_levels().unwrap();
+        let mut buffer = Int16BufferBuilder::new(children_array_len);
+        buffer.append_slice(rep_levels)?;
+        let rep_level_data = Some(buffer.finish());
+
+        self.def_level_buffer = Some(def_level_data_buffer.freeze());
+        self.rep_level_buffer = rep_level_data;
 
         let result_array = ListArray::from(list_data);
         println!("result array length: {:?}", result_array.len());
