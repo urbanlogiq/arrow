@@ -154,6 +154,18 @@ macro_rules! make_string {
     }};
 }
 
+macro_rules! make_string_from_list {
+    ($array_type:ty, $column: ident, $row: ident) => {{
+        let raw_val_arc = $column
+            .as_any()
+            .downcast_ref::<$array_type>()
+            .unwrap()
+            .value($row);
+
+        Ok(format!("{:?}", raw_val_arc))
+    }};
+}
+
 fn str_value(column: ArrayRef, row: usize) -> Result<String> {
     match column.data_type() {
         DataType::Utf8 => Ok(column
@@ -198,6 +210,9 @@ fn str_value(column: ArrayRef, row: usize) -> Result<String> {
         }
         DataType::Time64(unit) if *unit == TimeUnit::Nanosecond => {
             make_string!(Time64NanosecondArray, column, row)
+        }
+        DataType::List(_) => {
+            make_string_from_list!(ListArray, column, row)
         }
         _ => Err(ExecutionError::ExecutionError(format!(
             "Unsupported {:?} type for repl.",
