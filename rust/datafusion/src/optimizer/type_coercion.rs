@@ -26,7 +26,7 @@ use arrow::datatypes::Schema;
 
 use crate::error::{ExecutionError, Result};
 use crate::logicalplan::Expr;
-use crate::logicalplan::LogicalPlan;
+use crate::logicalplan::{LogicalPlan, Operator};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 
@@ -105,12 +105,23 @@ fn rewrite_expr(expr: &Expr, schema: &Schema) -> Result<Expr> {
                     right: Arc::new(right),
                 })
             } else {
-                let super_type = utils::get_supertype(&left_type, &right_type)?;
-                Ok(Expr::BinaryExpr {
-                    left: Arc::new(left.cast_to(&super_type, schema)?),
-                    op: op.clone(),
-                    right: Arc::new(right.cast_to(&super_type, schema)?),
-                })
+                match op {
+                    Operator::Contains => {
+                        return Ok(Expr::BinaryExpr {
+                            left: Arc::new(left.cast_to(&left_type, schema)?),
+                            op: op.clone(),
+                            right: Arc::new(right.cast_to(&right_type, schema)?),
+                        });
+                    },
+                    _ => {
+                        let super_type = utils::get_supertype(&left_type, &right_type)?;
+                        return Ok(Expr::BinaryExpr {
+                            left: Arc::new(left.cast_to(&super_type, schema)?),
+                            op: op.clone(),
+                            right: Arc::new(right.cast_to(&super_type, schema)?),
+                        });
+                    },
+                };
             }
         }
         Expr::IsNull(e) => Ok(Expr::IsNull(Arc::new(rewrite_expr(e, schema)?))),

@@ -28,8 +28,9 @@ use std::sync::Arc;
 
 use crate::array::*;
 use crate::compute::util::apply_bin_op_to_option_bitmap;
-use crate::datatypes::{ArrowNumericType, BooleanType, DataType};
+use crate::datatypes::{ArrowNumericType, BooleanType, DataType, ArrowPrimitiveType, ToByteSlice};
 use crate::error::{ArrowError, Result};
+use crate::buffer::{Buffer};
 
 /// Helper function to perform boolean lambda function on values from two arrays, this
 /// version does not attempt to use SIMD.
@@ -347,6 +348,52 @@ where
     compare_op!(left, right, |a, b| a >= b)
 }
 
+pub fn contains<T>(left: &PrimitiveArray<T>, right: &ListArray) -> Result<BooleanArray>
+where
+    T: ArrowNumericType,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
+
+    let null_bit_buffer = apply_bin_op_to_option_bitmap(
+        left.data().null_bitmap(),
+        right.data().null_bitmap(),
+        |a, b| a & b,
+    )?;
+
+    let mut result = BooleanBufferBuilder::new(left.len());
+    for i in 0..left.len() {
+        let value_to_check = left.value(i);
+        let list_to_check = right.value(i);
+        let mut is_in = false;
+        let test_list = list_to_check
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        for i in 0..test_list.len() {
+            if test_list.value(i) == value_to_check {
+                is_in = true;
+            }
+        }
+        result.append(is_in);
+    }
+
+    let data = ArrayData::new(
+        DataType::Boolean,
+        left.len(),
+        None,
+        null_bit_buffer,
+        left.offset(),
+        vec![result.finish()],
+        vec![],
+    );
+    Ok(PrimitiveArray::<BooleanType>::from(Arc::new(data)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,6 +509,34 @@ mod tests {
         assert_eq!(true, c.value(0));
         assert_eq!(false, c.value(1));
         assert_eq!(true, c.value(2));
+    }
+
+    #[test]
+    fn test_list_array_contains_numeric() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
+            .build();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
+
+        // Construct a list array from the above two
+        let list_data_type = DataType::List(Box::new(DataType::Int32));
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(3)
+            .add_buffer(value_offsets.clone())
+            .add_child_data(value_data.clone())
+            .build();
+
+        let a = Int32Array::from(vec![Some(1), Some(1), Some(1)]);
+        let b = ListArray::from(list_data);
+        let c = contains(&a, &b).unwrap();
+        assert_eq!(true, c.value(0));
+        assert_eq!(false, c.value(1));
+        assert_eq!(false, c.value(2));
     }
 
     macro_rules! test_utf8 {

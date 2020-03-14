@@ -87,6 +87,7 @@ pub fn expr_to_field(e: &Expr, input_schema: &Schema) -> Result<Field> {
         } => {
             let left_type = left.get_type(input_schema);
             let right_type = right.get_type(input_schema);
+            println!("getting supertype in expr_to_field");
             Ok(Field::new(
                 "binary_expr",
                 get_supertype(&left_type, &right_type).unwrap(),
@@ -249,5 +250,15 @@ mod tests {
         );
         assert_eq!(1, accum.len());
         assert!(accum.contains(&3));
+    }
+
+    #[test]
+    fn test_get_supertype_for_array_contains() -> Result<()> {
+        let item_type = DataType::Int32;
+        let list_type = DataType::List(Box::new(DataType::Int32));
+        let super_type = get_supertype(&item_type, &list_type)?;
+        assert_eq!(item_type, super_type);
+
+        Ok(())
     }
 }
