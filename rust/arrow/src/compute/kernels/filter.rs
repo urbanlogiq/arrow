@@ -61,11 +61,39 @@ macro_rules! filter_array {
         let b = $array.as_any().downcast_ref::<$array_type>().unwrap();
         let mut builder = $array_type::builder(b.len());
         for i in 0..b.len() {
+            println!("b: {:?}", b);
             if $filter.value(i) {
                 if b.is_null(i) {
                     builder.append_null()?;
                 } else {
                     builder.append_value(b.value(i))?;
+                }
+            }
+        }
+        Ok(Arc::new(builder.finish()))
+    }};
+}
+
+macro_rules! filter_list_array {
+    ($array:expr, $filter:expr, $item_builder:ident, $item_array_type:ident) => {{
+        let list_of_lists = $array.as_any().downcast_ref::<ListArray>().unwrap();
+        let values_builder = $item_builder::new(list_of_lists.len());
+        let mut builder = ListBuilder::new(values_builder);
+        for i in 0..list_of_lists.len() {
+            if $filter.value(i) {
+                if list_of_lists.is_null(i) {
+                    builder.append(false)?;
+                } else {
+                    let this_inner_list = list_of_lists.value(i);
+                    let inner_list = this_inner_list.as_any().downcast_ref::<$item_array_type>().unwrap();
+                    for j in 0..inner_list.len() {
+                        if inner_list.is_null(j) {
+                            builder.values().append_null();
+                        } else {
+                            builder.values().append_value(inner_list.value(j))?;
+                        }
+                    }
+                    builder.append(true)?;
                 }
             }
         }
@@ -125,6 +153,22 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
             filter_array!(array, filter, TimestampNanosecondArray)
         }
+        DataType::List(dt) => {
+            // TO DO: is there a better way (avoid this match?)
+            // If not, fill in rest of cases
+            match &**dt {
+                DataType::Int32 => filter_list_array!(array, filter, Int32Builder, Int32Array),
+                DataType::Int64 => filter_list_array!(array, filter, Int64Builder, Int64Array),
+                DataType::Float32 => filter_list_array!(array, filter, Float32Builder, Float32Array),
+                DataType::Float64 => filter_list_array!(array, filter, Float64Builder, Float64Array),
+                other => {
+                    return Err(ArrowError::ComputeError(format!(
+                        "filter not supported for List({:?})",
+                        other
+                    )));
+                }
+            }
+        }
         DataType::Binary => {
             let b = array.as_any().downcast_ref::<BinaryArray>().unwrap();
             let mut values: Vec<&[u8]> = Vec::with_capacity(b.len());
@@ -155,6 +199,8 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Buffer;
+    use crate::datatypes::ToByteSlice;
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
@@ -265,12 +311,42 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_array_with_null() {
+    fn TODO_REMOVE_test_filter_array_with_null() {
         let a = Int32Array::from(vec![Some(5), None]);
         let b = BooleanArray::from(vec![false, true]);
         let c = filter(&a, &b).unwrap();
         let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(1, d.len());
         assert_eq!(true, d.is_null(0));
+    }
+
+    #[test]
+    fn test_test_filter_list_array() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
+            .build();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+        let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
+
+        // Construct a list array from the above two
+        let list_data_type = DataType::List(Box::new(DataType::Int32));
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(3)
+            .add_buffer(value_offsets.clone())
+            .add_child_data(value_data.clone())
+            .build();
+
+        let a = ListArray::from(list_data);
+        let b = BooleanArray::from(vec![true, false, true]);
+        let c = filter(&a, &b).unwrap();
+        let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(2, d.len());
+        // TO DO : TEST VALUES
+        // assert_eq!(5, d.value(0));
+        // assert_eq!(8, d.value(1));
     }
 }
