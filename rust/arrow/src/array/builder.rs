@@ -1584,6 +1584,11 @@ mod tests {
         builder.values().append_value(7).unwrap();
         builder.append(true).unwrap();
         let list_array = builder.finish();
+        for i in 0..3 {
+            println!("value offset at {:?}: {:?}:", i, list_array.value_offset(i));
+        }
+
+        println!("data null bit map: {:?}", list_array.data().null_bitmap().as_ref().unwrap());
 
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());

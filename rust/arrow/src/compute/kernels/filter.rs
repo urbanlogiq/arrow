@@ -81,15 +81,21 @@ macro_rules! filter_list_array {
         let mut builder = ListBuilder::new(values_builder);
         for i in 0..list_of_lists.len() {
             if $filter.value(i) {
+                println!("filter value: {:?}", $filter.value(i));
                 if list_of_lists.is_null(i) {
                     builder.append(false)?;
+                    println!("list_of_lists is null");
                 } else {
                     let this_inner_list = list_of_lists.value(i);
+                    println!("this inner list: {:?}", this_inner_list);
                     let inner_list = this_inner_list.as_any().downcast_ref::<$item_array_type>().unwrap();
+                    println!("inner list: {:?}", this_inner_list);
                     for j in 0..inner_list.len() {
                         if inner_list.is_null(j) {
-                            builder.values().append_null();
+                            println!("inner list value at: {:?} is null", j);
+                            builder.values().append_null()?;
                         } else {
+                            println!("inner list value at: {:?} is {:?}", j, inner_list.value(j));
                             builder.values().append_value(inner_list.value(j))?;
                         }
                     }
@@ -201,6 +207,7 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
     use crate::datatypes::ToByteSlice;
+    use crate::util::bit_util;
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
@@ -311,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn TODO_REMOVE_test_filter_array_with_null() {
+    fn test_filter_array_with_null() {
         let a = Int32Array::from(vec![Some(5), None]);
         let b = BooleanArray::from(vec![false, true]);
         let c = filter(&a, &b).unwrap();
@@ -329,24 +336,57 @@ mod tests {
             .build();
 
         // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
+        //  [[0, 1, 2], [3, 4, 5], [6, 7], null]
+        let value_offsets = Buffer::from(&[0, 3, 6, 8, 8].to_byte_slice());
+        println!("value offsets: {:?}", value_offsets);
+
+        // Set null bits for the nested array:
+        //  [[0, 1, 2], [3, 4, 5], [6, 7], null]
+        // Set null buts for the nested array:
+        let mut null_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut null_bits, 0);
+        bit_util::set_bit(&mut null_bits, 1);
+        bit_util::set_bit(&mut null_bits, 2);
 
         // Construct a list array from the above two
         let list_data_type = DataType::List(Box::new(DataType::Int32));
         let list_data = ArrayData::builder(list_data_type.clone())
-            .len(3)
+            .len(4)
             .add_buffer(value_offsets.clone())
             .add_child_data(value_data.clone())
+            .null_bit_buffer(Buffer::from(null_bits))
             .build();
 
         let a = ListArray::from(list_data);
-        let b = BooleanArray::from(vec![true, false, true]);
+        let b = BooleanArray::from(vec![false, true, false, true]);
         let c = filter(&a, &b).unwrap();
-        let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
+        let d = c.as_ref().as_any().downcast_ref::<ListArray>().unwrap();
+
+        assert_eq!(DataType::Int32, d.value_type());
+
+        // result should be [[3, 4, 5], null]
         assert_eq!(2, d.len());
-        // TO DO : TEST VALUES
-        // assert_eq!(5, d.value(0));
-        // assert_eq!(8, d.value(1));
+        assert_eq!(true, d.is_null(1));
+        assert_eq!(1, d.null_count());
+        assert_eq!(0, d.value_offset(0));
+        assert_eq!(3, d.value_offset(1));
+        assert_eq!(3, d.value_length(0));
+        assert_eq!(0, d.value_length(1));
+        assert_eq!(
+            Buffer::from(&[3, 4, 5].to_byte_slice()),
+            d.values().data().buffers()[0].clone()
+        );
+        assert_eq!(
+            Buffer::from(&[0, 3, 3].to_byte_slice()),
+            d.data().buffers()[0].clone()
+        );
+
+        let inner_list = d.value(0);
+        let inner_list = inner_list.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(3, inner_list.len());
+        assert_eq!(0, inner_list.null_count());
+        assert_eq!(inner_list.value(0), 3);
+        assert_eq!(inner_list.value(1), 4);
+        assert_eq!(inner_list.value(2), 5);
     }
 }
