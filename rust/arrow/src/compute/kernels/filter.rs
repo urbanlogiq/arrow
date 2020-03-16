@@ -61,7 +61,6 @@ macro_rules! filter_array {
         let b = $array.as_any().downcast_ref::<$array_type>().unwrap();
         let mut builder = $array_type::builder(b.len());
         for i in 0..b.len() {
-            println!("b: {:?}", b);
             if $filter.value(i) {
                 if b.is_null(i) {
                     builder.append_null()?;
@@ -81,21 +80,15 @@ macro_rules! filter_list_array {
         let mut builder = ListBuilder::new(values_builder);
         for i in 0..list_of_lists.len() {
             if $filter.value(i) {
-                println!("filter value: {:?}", $filter.value(i));
                 if list_of_lists.is_null(i) {
                     builder.append(false)?;
-                    println!("list_of_lists is null");
                 } else {
                     let this_inner_list = list_of_lists.value(i);
-                    println!("this inner list: {:?}", this_inner_list);
                     let inner_list = this_inner_list.as_any().downcast_ref::<$item_array_type>().unwrap();
-                    println!("inner list: {:?}", this_inner_list);
                     for j in 0..inner_list.len() {
                         if inner_list.is_null(j) {
-                            println!("inner list value at: {:?} is null", j);
                             builder.values().append_null()?;
                         } else {
-                            println!("inner list value at: {:?} is {:?}", j, inner_list.value(j));
                             builder.values().append_value(inner_list.value(j))?;
                         }
                     }
@@ -328,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn test_test_filter_list_array() {
+    fn test_filter_list_array() {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)

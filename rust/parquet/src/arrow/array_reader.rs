@@ -28,7 +28,7 @@ use std::vec::Vec;
 
 use arrow::array::{
     ArrayDataBuilder, ArrayDataRef, ArrayRef, BooleanBufferBuilder, BufferBuilderTrait,
-    Int16BufferBuilder, StructArray, ListArray, ArrayData, PrimitiveArray, Array
+    Int16BufferBuilder, StructArray, ListArray, ArrayData, PrimitiveArray, Array, ListBuilder, Int32Builder,
 };
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{DataType as ArrowType, Field, IntervalUnit, ToByteSlice, Int64Type as ArrowInt64Type};
@@ -129,13 +129,13 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
 
     /// Reads at most `batch_size` records into array.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        println!("in primitive next_batch");
+        // println!("in primitive next_batch");
         let mut records_read = 0usize;
         while records_read < batch_size {
             let records_to_read = batch_size - records_read;
 
             let records_read_once = self.record_reader.read_records(records_to_read)?;
-            println!("records read once: {:?}", records_read_once);
+            // println!("records read once: {:?}", records_read_once);
             records_read = records_read + records_read_once;
             // Record reader exhausted
             if records_read_once < records_to_read {
@@ -526,33 +526,16 @@ impl ArrayReader for ListArrayReader {
     /// null_bitmap[i] = (def_levels[i] >= self.def_level);
     /// ```
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        // let item_type = match &self.data_type {
-        //     ArrowType::List(x) => x,
-        //     _ => return Err(ParquetError::General("list array reader operating on non-list type".to_string()))
-        // };
-
-        println!("self.item_reader: {:?}", self.item_reader.get_data_type());
         let next_batch_array = self.item_reader.next_batch(batch_size).unwrap();
-        println!("next batch array: {:?}", next_batch_array);
-        println!("\nnext batch array len: {:?}\n", next_batch_array.len());
+        // println!("next batch array: {:?}", next_batch_array);
+        // println!("\nnext batch array len: {:?}\n", next_batch_array.len());
         if next_batch_array.len() == 0 {
             self.def_level_buffer = None;
             self.rep_level_buffer = None;
-            let empty_buffer: Vec<u8> = Vec::new();
-            let value_data = ArrayData::builder(ArrowType::Int64)
-                .len(0)
-                .add_buffer(Buffer::from(empty_buffer.to_byte_slice()))
-                .build();
-
-            let value_offsets = Buffer::from(vec![0].to_byte_slice());
-
-            let list_data = ArrayData::builder(self.get_data_type().clone())
-                .len(0)
-                .add_buffer(value_offsets.clone())
-                .add_child_data(value_data)
-                .build();
-
-            return Ok(Arc::new(ListArray::from(list_data)));
+            let values_builder = Int32Builder::new(10); // TO DO: use different type of builder based on item type (Morgan 16/03/2020)
+            let mut builder = ListBuilder::new(values_builder);
+            let empty_list_array = builder.finish();
+            return Ok(Arc::new(empty_list_array));
         }
         // let item_array = self.item_reader.next_batch(batch_size);
         // println!("item array: {:?}", item_array);
@@ -560,8 +543,8 @@ impl ArrayReader for ListArrayReader {
         let rep_levels = self.item_reader.get_rep_levels().unwrap();
 
 
-        println!("item def_levels: {:?}, item rep_levels: {:?}", def_levels, rep_levels);
-        println!("list def_levels: {:?}, list rep_levels: {:?}", self.get_def_levels(), self.get_rep_levels());
+        // println!("item def_levels: {:?}, item rep_levels: {:?}", def_levels, rep_levels);
+        // println!("list def_levels: {:?}, list rep_levels: {:?}", self.get_def_levels(), self.get_rep_levels());
 
         // check that array child data has same size
         // let array_ref_next_batch: ArrayRef = next_batch_array;
@@ -597,7 +580,7 @@ impl ArrayReader for ListArrayReader {
         let value_data: ArrayDataRef = next_batch_array.data();
         // println!("offsets: {:?}", offsets);
         // println!("value offsets: {:?}, value data: {:?}", value_offsets, value_data);
-        println!("len offsets: {:?}", offsets.len());
+        // println!("len offsets: {:?}", offsets.len());
         let list_data = ArrayData::builder(self.get_data_type().clone())
             .len(offsets.len() - 1)
             .add_buffer(value_offsets.clone())
@@ -614,7 +597,7 @@ impl ArrayReader for ListArrayReader {
         self.rep_level_buffer = rep_level_data;
 
         let result_array = ListArray::from(list_data);
-        println!("result array length: {:?}", result_array.len());
+        // println!("result array length: {:?}", result_array.len());
         return Ok(Arc::new(result_array));
     }
 
@@ -928,7 +911,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             if cur_type.name().to_string() != "item" {
                 new_context.path.append(vec![cur_type.name().to_string()]);
             }
-            println!("path in primitive: {:?}", new_context.path);
+            // println!("path in primitive: {:?}", new_context.path);
             match cur_type.get_basic_info().repetition() {
                 Repetition::REPEATED => {
                     new_context.def_level += 1;
@@ -961,7 +944,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     ) -> Result<Option<Box<ArrayReader>>> {
         let mut new_context = context.clone();
         new_context.path.append(vec![cur_type.name().to_string()]);
-        println!("path in struct: {:?}", new_context.path);
+        // println!("path in struct: {:?}", new_context.path);
         if cur_type.get_basic_info().has_repetition() {
             match cur_type.get_basic_info().repetition() {
                 Repetition::REPEATED => {
@@ -1016,7 +999,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         let item_child = &list_child.get_fields()[0];
 
         new_context.path.append(vec![list_type.name().to_string()]);
-        println!("path in visit list with item: {:?}", new_context.path);
+        // println!("path in visit list with item: {:?}", new_context.path);
 
         match list_type.get_basic_info().repetition() {
             Repetition::REPEATED => {
@@ -1079,7 +1062,7 @@ impl<'a> ArrayReaderBuilder {
 
     /// Check whether one column in included in this array reader builder.
     fn is_included(&self, t: &Type) -> bool {
-        println!("included columns: {:?}", self.columns_included);
+        // println!("included columns: {:?}", self.columns_included);
         self.columns_included.contains_key(&(t as *const Type))
     }
 
@@ -1162,7 +1145,7 @@ impl<'a> ArrayReaderBuilder {
 
         for child in cur_type.get_fields() {
             if let Some(child_reader) = self.dispatch(child.clone(), context)? {
-                println!("child name: {:?}", child.name());
+                // println!("child name: {:?}", child.name());
                 fields.push(Field::new(
                     child.name(),
                     child_reader.get_data_type().clone(),
@@ -1171,7 +1154,7 @@ impl<'a> ArrayReaderBuilder {
                 children_reader.push(child_reader);
             }
         }
-        println!("fields: {:?}", fields);
+        // println!("fields: {:?}", fields);
         if !fields.is_empty() {
             let arrow_type = ArrowType::Struct(fields);
             Ok(Some(Box::new(StructArrayReader::new(
@@ -1299,6 +1282,7 @@ mod tests {
 
             // Read first 50 values, which are all from the first column chunck
             let array = array_reader.next_batch(50).unwrap();
+            println!("array before downcast for primitive: {:?}", array);
             let array = array
                 .as_any()
                 .downcast_ref::<PrimitiveArray<ArrowInt32>>()
@@ -1610,23 +1594,23 @@ mod tests {
         );
 
         let struct_array = struct_array_reader.next_batch(1024).unwrap();
-        // let struct_array = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
-        //
-        // assert_eq!(5, struct_array.len());
-        // assert_eq!(
-        //     vec![true, false, false, false, false],
-        //     (0..5)
-        //         .map(|idx| struct_array.data_ref().is_null(idx))
-        //         .collect::<Vec<bool>>()
-        // );
-        // assert_eq!(
-        //     Some(vec![0, 1, 1, 1, 1].as_slice()),
-        //     struct_array_reader.get_def_levels()
-        // );
-        // assert_eq!(
-        //     Some(vec![1, 1, 1, 1, 1].as_slice()),
-        //     struct_array_reader.get_rep_levels()
-        // );
+        let struct_array = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
+
+        assert_eq!(5, struct_array.len());
+        assert_eq!(
+            vec![true, false, false, false, false],
+            (0..5)
+                .map(|idx| struct_array.data_ref().is_null(idx))
+                .collect::<Vec<bool>>()
+        );
+        assert_eq!(
+            Some(vec![0, 1, 1, 1, 1].as_slice()),
+            struct_array_reader.get_def_levels()
+        );
+        assert_eq!(
+            Some(vec![1, 1, 1, 1, 1].as_slice()),
+            struct_array_reader.get_rep_levels()
+        );
     }
 
     #[test]
@@ -1647,7 +1631,7 @@ mod tests {
             ArrowType::Struct(vec![Field::new("b_c_int", ArrowType::Int32, true)]),
             true,
         )]);
-        println!("here");
+        // println!("here");
         assert_eq!(array_reader.get_data_type(), &arrow_type);
         let array = array_reader.next_batch(1024).unwrap();
         // let array = array
@@ -1655,7 +1639,7 @@ mod tests {
         //     .downcast_ref::<ListArray>()
         //     .unwrap();
 
-        println!("array: {:?}", array);
+        // println!("array: {:?}", array);
     }
 
     #[test]
@@ -1678,10 +1662,11 @@ mod tests {
         assert_eq!(array_reader.get_data_type(), &arrow_type);
         println!("after assert_eq");
         let array = array_reader.next_batch(10).unwrap();
-        // let array = array
-        //     .as_any()
-        //     .downcast_ref::<ListArray>()
-        //     .unwrap();
+        println!("array before downcast: {:?}", array);
+        let array = array
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
 
         println!("array: {:?}", array);
     }
@@ -1696,9 +1681,11 @@ mod tests {
             file_reader,
         )
         .unwrap();
+        let array = array_reader.next_batch(10).unwrap();
+        println!("array before downcast: {:?}", array);
 
-        // lists are represented as structs containing a single optional field named "list",
-        // which contains a single repeated field called "item"
+        // // lists are represented as structs containing a single optional field named "list",
+        // // which contains a single repeated field called "item"
         // let item_field = Field::new("item", ArrowType::Int64, true);
         // let list_field = Field::new("list", ArrowType::Struct(vec![item_field]), true);
         // let arrow_type = ArrowType::Struct(vec![Field::new(
@@ -1706,14 +1693,14 @@ mod tests {
         //     ArrowType::List(Box::new(ArrowType::Int64)),
         //     true,
         // )]);
-        //
-        // assert_eq!(array_reader.get_data_type(), &arrow_type);
-        let array = array_reader.next_batch(0).unwrap();
-        // let array = array
-        //     .as_any()
-        //     .downcast_ref::<ListArray>()
-        //     .unwrap();
-
-        println!("array: {:?}", array);
+        // //
+        // // assert_eq!(array_reader.get_data_type(), &arrow_type);
+        // let array = array_reader.next_batch(0).unwrap();
+        // // let array = array
+        // //     .as_any()
+        // //     .downcast_ref::<ListArray>()
+        // //     .unwrap();
+        // //
+        // // println!("array: {:?}", array);
     }
 }

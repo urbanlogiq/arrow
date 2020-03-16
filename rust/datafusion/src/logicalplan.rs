@@ -110,7 +110,7 @@ pub enum Operator {
     Divide,
     /// Remainder operator, like `%`
     Modulus,
-    /// Contains operator, like `@>`
+    /// Contains operator, like `>]`
     Contains,
     /// Logical AND, like `&&`
     And,
@@ -251,7 +251,7 @@ impl Expr {
                 ref right,
                 ref op,
             } => match op {
-                Operator::Contains => left.get_type(schema),
+                Operator::Contains => left.get_type(schema), // TO DO: is this correct?? Morgan
                 Operator::Eq | Operator::NotEq => DataType::Boolean,
                 Operator::Lt | Operator::LtEq => DataType::Boolean,
                 Operator::Gt | Operator::GtEq => DataType::Boolean,
