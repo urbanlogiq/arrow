@@ -75,9 +75,6 @@ impl RecordBatch {
                 "number of columns must match number of fields in schema".to_string(),
             ));
         }
-        println!("trying new record batch");
-        println!("schema: {:?}", schema);
-        println!("columns: {:?}", columns);
         // check that all columns have the same row count, and match the schema
         let len = columns[0].data().len();
         for i in 0..columns.len() {

@@ -510,7 +510,7 @@ pub(crate) fn get_fb_field_type<'a: 'b, 'b>(
             )
         }
         List(ref list_type) => {
-            // TO DO: DOES THIS NEED TO BE UPDATED? MORGAN
+            // TO DO: DOES THIS NEED TO BE UPDATED? (Morgan 16/03/2020)
             let inner_types = get_fb_field_type(list_type, &mut fbb);
             let child = ipc::Field::create(
                 &mut fbb,

@@ -2325,32 +2325,10 @@ mod tests {
 
     #[test]
     fn test_empty_list_array() {
-        let list_data = ArrayData::builder(DataType::List(Box::new(DataType::Int32)))
-            .len(0)
-            .build();
-        let list_array = ListArray::from(list_data);
+        let values_builder = Int32Builder::new(10);
+        let mut builder = ListBuilder::new(values_builder);
+        let list_array = builder.finish();
         assert_eq!(0, list_array.len());
-    }
-
-    #[test]
-    fn test_different_empty_list_array() {
-        // Construct a value array
-        let test_buffer: Vec<u8> = Vec::new();
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(0)
-            .add_buffer(Buffer::from(test_buffer.to_byte_slice()))
-            .build();
-
-        let value_offsets = Buffer::from(test_buffer.to_byte_slice());
-
-        // Construct a list array from the above two
-        let list_data_type = DataType::List(Box::new(DataType::Int32));
-        let list_data = ArrayData::builder(list_data_type.clone())
-            .len(0)
-            .add_buffer(value_offsets.clone())
-            .add_child_data(value_data.clone())
-            .build();
-        let list_array = ListArray::from(list_data);
     }
 
     #[test]

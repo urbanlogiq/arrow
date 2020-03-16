@@ -1383,7 +1383,7 @@ mod tests {
             vec![Arc::new(a), Arc::new(b)],
         )?;
 
-        // expression: "a @> b"
+        // expression: "a >] b"
         let contains = binary(col(0), Operator::Contains, col(1));
 
         let result = contains.evaluate(&batch)?;

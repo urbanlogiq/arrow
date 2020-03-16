@@ -273,14 +273,4 @@ mod tests {
         assert!(accum.contains(&3));
         Ok(())
     }
-
-    #[test]
-    fn test_get_supertype_for_array_contains() -> Result<()> {
-        let item_type = DataType::Int32;
-        let list_type = DataType::List(Box::new(DataType::Int32));
-        let super_type = get_supertype(&item_type, &list_type)?;
-        assert_eq!(item_type, super_type);
-
-        Ok(())
-    }
 }
