@@ -28,7 +28,7 @@ use std::vec::Vec;
 
 use arrow::array::{
     ArrayDataBuilder, ArrayDataRef, ArrayRef, BooleanBufferBuilder, BufferBuilderTrait,
-    Int16BufferBuilder, StructArray, ListArray, ArrayData, PrimitiveArray, Array, ListBuilder, Int32Builder,
+    Int16BufferBuilder, StructArray, ListArray, ArrayData, PrimitiveArray, Array, ListBuilder, Int64Builder,
 };
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{DataType as ArrowType, Field, IntervalUnit, ToByteSlice, Int64Type as ArrowInt64Type};
@@ -532,7 +532,7 @@ impl ArrayReader for ListArrayReader {
         if next_batch_array.len() == 0 {
             self.def_level_buffer = None;
             self.rep_level_buffer = None;
-            let values_builder = Int32Builder::new(10); // TO DO: use different type of builder based on item type (Morgan 16/03/2020)
+            let values_builder = Int64Builder::new(10); // TO DO: use different type of builder based on item type (Morgan 16/03/2020)
             let mut builder = ListBuilder::new(values_builder);
             let empty_list_array = builder.finish();
             return Ok(Arc::new(empty_list_array));
