@@ -957,7 +957,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
                 _ => (),
             }
         }
-
+        println!("in visit struct, cur_type: {:?}", cur_type);
         if let Some(reader) = self.build_for_struct_type_inner(&cur_type, &new_context)? {
             if cur_type.get_basic_info().has_repetition()
                 && cur_type.get_basic_info().repetition() == Repetition::REPEATED
@@ -1145,7 +1145,8 @@ impl<'a> ArrayReaderBuilder {
 
         for child in cur_type.get_fields() {
             if let Some(child_reader) = self.dispatch(child.clone(), context)? {
-                // println!("child name: {:?}", child.name());
+                println!("child name: {:?}", child.name());
+                println!("child data type: {:?}", child_reader.get_data_type().clone());
                 fields.push(Field::new(
                     child.name(),
                     child_reader.get_data_type().clone(),
