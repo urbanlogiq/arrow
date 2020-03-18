@@ -611,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_stream_with_array_column() {
+    fn test_write_stream_with_int_array_column() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::List(Box::new(DataType::Int32)), false),
         ]);
@@ -650,10 +650,9 @@ mod tests {
         let file =
             File::open("target/debug/testdata/test_array.stream").unwrap();
         let mut reader = StreamReader::try_new(file).unwrap();
-
-        println!("new schema: {:?}", reader.schema());
         let new_batch = reader.next_batch().unwrap().unwrap();
         println!("new batch: {:?}", new_batch.column(0));
+        println!("new schema: {:?}", reader.schema());
     }
 
     /// Read gzipped JSON file

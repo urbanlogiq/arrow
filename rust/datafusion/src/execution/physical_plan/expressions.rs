@@ -40,7 +40,8 @@ use arrow::compute::kernels::arithmetic::{add, divide, multiply, subtract};
 use arrow::compute::kernels::boolean::{and, or};
 use arrow::compute::kernels::cast::cast;
 use arrow::compute::kernels::comparison::{eq, gt, gt_eq, lt, lt_eq, neq,
-    eq_utf8, gt_eq_utf8, gt_utf8, like_utf8, lt_eq_utf8, lt_utf8, neq_utf8, nlike_utf8, contains,
+    eq_utf8, gt_eq_utf8, gt_utf8, like_utf8, lt_eq_utf8, lt_utf8, neq_utf8, nlike_utf8,
+    contains, contains_utf8,
 };
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -917,8 +918,6 @@ macro_rules! compute_op {
     }};
 }
 
-/// The binary_array_op macro includes types that extend beyond the primitive,
-/// such as Utf8 strings.
 macro_rules! list_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
@@ -932,15 +931,16 @@ macro_rules! list_array_op {
             DataType::UInt64 => compute_list_array_op!($LEFT, $RIGHT, $OP, UInt64Array),
             DataType::Float32 => compute_list_array_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_list_array_op!($LEFT, $RIGHT, $OP, Float64Array),
+            DataType::Utf8 => compute_list_array_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
             other => Err(ExecutionError::General(format!(
-                "Unsupported data type {:?}",
+                "Unsupported data type {:?} for Contains operator",
                 other
             ))),
         }
     }};
 }
 
-/// Invoke a compute kernel on a pair of arrays
+/// Invoke a compute kernel on a primitive array and a ListArray
 macro_rules! compute_list_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
         let ll = $LEFT
@@ -952,6 +952,21 @@ macro_rules! compute_list_array_op {
             .downcast_ref::<ListArray>()
             .expect("compute_op failed to downcast array");
         Ok(Arc::new($OP(&ll, &rr)?))
+    }};
+}
+
+/// Invoke a compute kernel on a binary data array and a ListArray
+macro_rules! compute_list_array_utf8_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("compute_op failed to downcast array");
+        Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
     }};
 }
 

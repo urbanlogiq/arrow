@@ -154,7 +154,7 @@ fn string_parquet_query_array() { //TO DO: this test file is not part of parquet
     let testdata = env::var("PARQUET_TEST_DATA").expect("PARQUET_TEST_DATA not defined");
     ctx.register_parquet("string_array_table", &format!("{}/string_array.parquet", testdata))
         .unwrap();
-    let sql = "SELECT string_array FROM string_array_table WHERE abc >] string_array";
+    let sql = "SELECT string_array FROM string_array_table WHERE 'abc' >] string_array";
     let plan = ctx.create_logical_plan(&sql).expect("logical");
     let plan = ctx.optimize(&plan).expect("optimize");
     let plan = ctx.create_physical_plan(&plan, DEFAULT_BATCH_SIZE).expect("physical");
