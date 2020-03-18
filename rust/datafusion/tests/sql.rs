@@ -131,6 +131,40 @@ fn parquet_query_int_array() { //TO DO: this test file is not part of parquet-te
     }
 }
 
+// #[test]
+// fn nested_parquet_query_int_array() { //TO DO: this test file is not part of parquet-testing submodule (Morgan, 16/03/2020)
+//     let mut ctx = ExecutionContext::new();
+//     let testdata = env::var("PARQUET_TEST_DATA").expect("PARQUET_TEST_DATA not defined");
+//     ctx.register_parquet("nested_int_array_test", &format!("{}/nested_int_array.parquet", testdata))
+//         .unwrap();
+//     let sql = "SELECT nested FROM nested_int_array_test";
+//     let plan = ctx.create_logical_plan(&sql).expect("logical");
+//     let plan = ctx.optimize(&plan).expect("optimize");
+//     let plan = ctx.create_physical_plan(&plan, DEFAULT_BATCH_SIZE).expect("physical");
+//     let results = ctx.collect(plan.as_ref()).expect("record batches");
+//     for batch in results {
+//         assert_eq!(8, batch.num_rows());
+//         assert_eq!(1, batch.num_columns());
+//     }
+// }
+
+#[test]
+fn string_parquet_query_array() { //TO DO: this test file is not part of parquet-testing submodule (Morgan, 16/03/2020)
+    let mut ctx = ExecutionContext::new();
+    let testdata = env::var("PARQUET_TEST_DATA").expect("PARQUET_TEST_DATA not defined");
+    ctx.register_parquet("string_array_table", &format!("{}/string_array.parquet", testdata))
+        .unwrap();
+    let sql = "SELECT string_array FROM string_array_table WHERE abc >] string_array";
+    let plan = ctx.create_logical_plan(&sql).expect("logical");
+    let plan = ctx.optimize(&plan).expect("optimize");
+    let plan = ctx.create_physical_plan(&plan, DEFAULT_BATCH_SIZE).expect("physical");
+    let results = ctx.collect(plan.as_ref()).expect("record batches");
+    for batch in results {
+        assert_eq!(8, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+    }
+}
+
 #[test]
 fn csv_count_star() {
     let mut ctx = ExecutionContext::new();

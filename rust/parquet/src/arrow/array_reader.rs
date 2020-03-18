@@ -28,10 +28,20 @@ use std::vec::Vec;
 
 use arrow::array::{
     ArrayDataBuilder, ArrayDataRef, ArrayRef, BooleanBufferBuilder, BufferBuilderTrait,
-    Int16BufferBuilder, StructArray, ListArray, ArrayData, PrimitiveArray, Array, ListBuilder, Int64Builder,
+    Int16BufferBuilder, StructArray, ListArray, ArrayData, PrimitiveArray, Array, ListBuilder,
+    StringBuilder, BinaryBuilder, PrimitiveBuilder,
 };
 use arrow::buffer::{Buffer, MutableBuffer};
-use arrow::datatypes::{DataType as ArrowType, Field, IntervalUnit, ToByteSlice, Int64Type as ArrowInt64Type};
+use arrow::datatypes::{
+    DataType as ArrowType, Field, IntervalUnit, ToByteSlice, Int64Type as ArrowInt64Type, TimeUnit as ArrowTimeUnit,
+    UInt8Type as ArrowUInt8Type, UInt16Type as ArrowUInt16Type, UInt32Type as ArrowUInt32Type, UInt64Type as ArrowUInt64Type,
+    Int8Type as ArrowInt8Type, Int16Type as ArrowInt16Type, Int32Type as ArrowInt32Type, Int64Type as ArrowInt64Type, Float32Type as ArrowFloat32Type,
+    Float64Type as ArrowFloat64Type, BooleanType as ArrowBooleanType, Date32Type as ArrowDate32Type, Date64Type as ArrowDate64Type, Time32SecondType as ArrowTime32SecondType,
+    Time32MillisecondType as ArrowTime32MillisecondType, Time64MicrosecondType as ArrowTime64MicrosecondType, Time64NanosecondType as ArrowTime64NanosecondType,
+    DurationSecondType as ArrowDurationSecondType, DurationMillisecondType as ArrowDurationMillisecondType, DurationMicrosecondType as ArrowDurationMicrosecondType,
+    DurationNanosecondType as ArrowDurationNanosecondType, TimestampSecondType as ArrowTimestampSecondType, TimestampMillisecondType as ArrowTimestampMillisecondType,
+    TimestampMicrosecondType as ArrowTimestampMicrosecondType, TimestampNanosecondType as ArrowTimestampNanosecondType,
+};
 use crate::arrow::converter::{
     BinaryConverter, BoolConverter, Converter, Float32Converter, Float64Converter,
     Int16Converter, Int32Converter, Int64Converter, Int8Converter, Int96Converter,
@@ -497,45 +507,77 @@ impl ListArrayReader {
     }
 }
 
+macro_rules! build_empty_list_array_with_primitive_items {
+    ($item_type:ident) => {{
+        let values_builder = PrimitiveBuilder::<$item_type>::new(0);
+        let mut builder = ListBuilder::new(values_builder);
+        let empty_list_array = builder.finish();
+        Ok(Arc::new(empty_list_array))
+    }};
+}
+
+fn build_empty_list_array(item_type: ArrowType) -> Result<ArrayRef> {
+    match item_type {
+        ArrowType::UInt8 => build_empty_list_array_with_primitive_items!(ArrowUInt8Type),
+        ArrowType::UInt16 => build_empty_list_array_with_primitive_items!(ArrowUInt16Type),
+        ArrowType::UInt32 => build_empty_list_array_with_primitive_items!(ArrowUInt32Type),
+        ArrowType::UInt64 => build_empty_list_array_with_primitive_items!(ArrowUInt64Type),
+        ArrowType::Int8 => build_empty_list_array_with_primitive_items!(ArrowInt8Type),
+        ArrowType::Int16 => build_empty_list_array_with_primitive_items!(ArrowInt16Type),
+        ArrowType::Int32 => build_empty_list_array_with_primitive_items!(ArrowInt32Type),
+        ArrowType::Int64 => build_empty_list_array_with_primitive_items!(ArrowInt64Type),
+        ArrowType::Float32 => build_empty_list_array_with_primitive_items!(ArrowFloat32Type),
+        ArrowType::Float64 => build_empty_list_array_with_primitive_items!(ArrowFloat64Type),
+        ArrowType::Boolean => build_empty_list_array_with_primitive_items!(ArrowBooleanType),
+        ArrowType::Date32(_) => build_empty_list_array_with_primitive_items!(ArrowDate32Type),
+        ArrowType::Date64(_) => build_empty_list_array_with_primitive_items!(ArrowDate64Type),
+        ArrowType::Time32(ArrowTimeUnit::Second) => build_empty_list_array_with_primitive_items!(ArrowTime32SecondType),
+        ArrowType::Time32(ArrowTimeUnit::Millisecond) => build_empty_list_array_with_primitive_items!(ArrowTime32MillisecondType),
+        ArrowType::Time64(ArrowTimeUnit::Microsecond) => build_empty_list_array_with_primitive_items!(ArrowTime64MicrosecondType),
+        ArrowType::Time64(ArrowTimeUnit::Nanosecond) => build_empty_list_array_with_primitive_items!(ArrowTime64NanosecondType),
+        ArrowType::Duration(ArrowTimeUnit::Second) => build_empty_list_array_with_primitive_items!(ArrowDurationSecondType),
+        ArrowType::Duration(ArrowTimeUnit::Millisecond) => build_empty_list_array_with_primitive_items!(ArrowDurationMillisecondType),
+        ArrowType::Duration(ArrowTimeUnit::Microsecond) => build_empty_list_array_with_primitive_items!(ArrowDurationMicrosecondType),
+        ArrowType::Duration(ArrowTimeUnit::Nanosecond) => build_empty_list_array_with_primitive_items!(ArrowDurationNanosecondType),
+        ArrowType::Timestamp(ArrowTimeUnit::Second, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampSecondType),
+        ArrowType::Timestamp(ArrowTimeUnit::Millisecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampMillisecondType),
+        ArrowType::Timestamp(ArrowTimeUnit::Microsecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampMicrosecondType),
+        ArrowType::Timestamp(ArrowTimeUnit::Nanosecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampNanosecondType),
+        ArrowType::Utf8 => {
+            let values_builder = StringBuilder::new(0);
+            let mut builder = ListBuilder::new(values_builder);
+            let empty_list_array = builder.finish();
+            Ok(Arc::new(empty_list_array))
+        },
+        ArrowType::Binary => {
+            let values_builder = BinaryBuilder::new(0);
+            let mut builder = ListBuilder::new(values_builder);
+            let empty_list_array = builder.finish();
+            Ok(Arc::new(empty_list_array))
+        },
+        _ => Err(ParquetError::General(format!("ListArray of type List({:?}) is not supported by array_reader", item_type)))
+    }
+}
+
 impl ArrayReader for ListArrayReader {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     /// Returns data type.
-    /// This must be a struct.
+    /// This must be a List.
     fn get_data_type(&self) -> &ArrowType {
         &self.data_type
     }
 
-    /// Read `batch_size` struct records.
-    ///
-    /// Definition levels of struct array is calculated as following:
-    /// ```ignore
-    /// def_levels[i] = min(child1_def_levels[i], child2_def_levels[i], ...,
-    /// childn_def_levels[i]);
-    /// ```
-    ///
-    /// Repetition levels of struct array is calculated as following:
-    /// ```ignore
-    /// rep_levels[i] = child1_rep_levels[i];
-    /// ```
-    ///
-    /// The null bitmap of struct array is calculated from def_levels:
-    /// ```ignore
-    /// null_bitmap[i] = (def_levels[i] >= self.def_level);
-    /// ```
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         let next_batch_array = self.item_reader.next_batch(batch_size).unwrap();
-        // println!("next batch array: {:?}", next_batch_array);
-        // println!("\nnext batch array len: {:?}\n", next_batch_array.len());
+
         if next_batch_array.len() == 0 {
             self.def_level_buffer = None;
             self.rep_level_buffer = None;
-            let values_builder = Int64Builder::new(10); // TO DO: use different type of builder based on item type (Morgan 16/03/2020)
-            let mut builder = ListBuilder::new(values_builder);
-            let empty_list_array = builder.finish();
-            return Ok(Arc::new(empty_list_array));
+            let item_type = self.item_reader.get_data_type().clone();
+            return build_empty_list_array(item_type);
         }
         // let item_array = self.item_reader.next_batch(batch_size);
         // println!("item array: {:?}", item_array);
