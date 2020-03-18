@@ -379,7 +379,50 @@ where
                 is_in = true;
             }
         }
-        result.append(is_in);
+        result.append(is_in)?;
+    }
+
+    let data = ArrayData::new(
+        DataType::Boolean,
+        left.len(),
+        None,
+        null_bit_buffer,
+        left.offset(),
+        vec![result.finish()],
+        vec![],
+    );
+    Ok(PrimitiveArray::<BooleanType>::from(Arc::new(data)))
+}
+
+pub fn contains_utf8(left: &StringArray, right: &ListArray) -> Result<BooleanArray> {
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
+
+    let null_bit_buffer = apply_bin_op_to_option_bitmap(
+        left.data().null_bitmap(),
+        right.data().null_bitmap(),
+        |a, b| a & b,
+    )?;
+
+    let mut result = BooleanBufferBuilder::new(left.len());
+    for i in 0..left.len() {
+        let value_to_check = left.value(i);
+        let list_to_check = right.value(i);
+        let mut is_in = false;
+        let test_list = list_to_check
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        for i in 0..test_list.len() {
+            if test_list.value(i) == value_to_check {
+                is_in = true;
+            }
+        }
+        result.append(is_in)?;
     }
 
     let data = ArrayData::new(
