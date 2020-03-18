@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use crate::array::*;
-use crate::datatypes::{ArrowNumericType, DataType, TimeUnit};
+use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 
 /// Helper function to perform boolean lambda function on values from two arrays.
@@ -73,8 +73,35 @@ macro_rules! filter_array {
     }};
 }
 
-macro_rules! filter_list_array {
-    ($array:expr, $filter:expr, $item_builder:ident, $item_array_type:ident) => {{
+macro_rules! filter_primitive_item_list_array {
+    ($array:expr, $filter:expr, $item_type:ident) => {{
+        let list_of_lists = $array.as_any().downcast_ref::<ListArray>().unwrap();
+        let values_builder = PrimitiveBuilder::<$item_type>::new(list_of_lists.len());
+        let mut builder = ListBuilder::new(values_builder);
+        for i in 0..list_of_lists.len() {
+            if $filter.value(i) {
+                if list_of_lists.is_null(i) {
+                    builder.append(false)?;
+                } else {
+                    let this_inner_list = list_of_lists.value(i);
+                    let inner_list = this_inner_list.as_any().downcast_ref::<PrimitiveArray::<$item_type>>().unwrap();
+                    for j in 0..inner_list.len() {
+                        if inner_list.is_null(j) {
+                            builder.values().append_null()?;
+                        } else {
+                            builder.values().append_value(inner_list.value(j))?;
+                        }
+                    }
+                    builder.append(true)?;
+                }
+            }
+        }
+        Ok(Arc::new(builder.finish()))
+    }};
+}
+
+macro_rules! filter_non_primitive_item_list_array {
+    ($array:expr, $filter:expr, $item_array_type:ident, $item_builder:ident) => {{
         let list_of_lists = $array.as_any().downcast_ref::<ListArray>().unwrap();
         let values_builder = $item_builder::new(list_of_lists.len());
         let mut builder = ListBuilder::new(values_builder);
@@ -153,13 +180,34 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
             filter_array!(array, filter, TimestampNanosecondArray)
         }
         DataType::List(dt) => {
-            // TO DO: is there a better way (avoid this match?)
-            // If not, fill in rest of cases
             match &**dt {
-                DataType::Int32 => filter_list_array!(array, filter, Int32Builder, Int32Array),
-                DataType::Int64 => filter_list_array!(array, filter, Int64Builder, Int64Array),
-                DataType::Float32 => filter_list_array!(array, filter, Float32Builder, Float32Array),
-                DataType::Float64 => filter_list_array!(array, filter, Float64Builder, Float64Array),
+                DataType::UInt8 => filter_primitive_item_list_array!(array, filter, UInt8Type),
+                DataType::UInt16 => filter_primitive_item_list_array!(array, filter, UInt16Type),
+                DataType::UInt32 => filter_primitive_item_list_array!(array, filter, UInt32Type),
+                DataType::UInt64 => filter_primitive_item_list_array!(array, filter, UInt64Type),
+                DataType::Int8 => filter_primitive_item_list_array!(array, filter, Int8Type),
+                DataType::Int16 => filter_primitive_item_list_array!(array, filter, Int16Type),
+                DataType::Int32 => filter_primitive_item_list_array!(array, filter, Int32Type),
+                DataType::Int64 => filter_primitive_item_list_array!(array, filter, Int64Type),
+                DataType::Float32 => filter_primitive_item_list_array!(array, filter, Float32Type),
+                DataType::Float64 => filter_primitive_item_list_array!(array, filter, Float64Type),
+                DataType::Boolean => filter_primitive_item_list_array!(array, filter, BooleanType),
+                DataType::Date32(_) => filter_primitive_item_list_array!(array, filter, Date32Type),
+                DataType::Date64(_) => filter_primitive_item_list_array!(array, filter, Date64Type),
+                DataType::Time32(TimeUnit::Second) => filter_primitive_item_list_array!(array, filter, Time32SecondType),
+                DataType::Time32(TimeUnit::Millisecond) => filter_primitive_item_list_array!(array, filter, Time32MillisecondType),
+                DataType::Time64(TimeUnit::Microsecond) => filter_primitive_item_list_array!(array, filter, Time64MicrosecondType),
+                DataType::Time64(TimeUnit::Nanosecond) => filter_primitive_item_list_array!(array, filter, Time64NanosecondType),
+                DataType::Duration(TimeUnit::Second) => filter_primitive_item_list_array!(array, filter, DurationSecondType),
+                DataType::Duration(TimeUnit::Millisecond) => filter_primitive_item_list_array!(array, filter, DurationMillisecondType),
+                DataType::Duration(TimeUnit::Microsecond) => filter_primitive_item_list_array!(array, filter, DurationMicrosecondType),
+                DataType::Duration(TimeUnit::Nanosecond) => filter_primitive_item_list_array!(array, filter, DurationNanosecondType),
+                DataType::Timestamp(TimeUnit::Second, _) => filter_primitive_item_list_array!(array, filter, TimestampSecondType),
+                DataType::Timestamp(TimeUnit::Millisecond, _) => filter_primitive_item_list_array!(array, filter, TimestampMillisecondType),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => filter_primitive_item_list_array!(array, filter, TimestampMicrosecondType),
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => filter_primitive_item_list_array!(array, filter, TimestampNanosecondType),
+                DataType::Binary => filter_non_primitive_item_list_array!(array, filter, BinaryArray, BinaryBuilder),
+                DataType::Utf8 => filter_non_primitive_item_list_array!(array, filter, StringArray, StringBuilder),
                 other => {
                     return Err(ArrowError::ComputeError(format!(
                         "filter not supported for List({:?})",
