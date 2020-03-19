@@ -370,34 +370,22 @@ mod tests {
 
     #[test]
     fn test_filter_list_array() {
-        // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
             .build();
 
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7], null]
         let value_offsets = Buffer::from(&[0, 3, 6, 8, 8].to_byte_slice());
-        println!("value offsets: {:?}", value_offsets);
 
-        // Set null bits for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7], null]
-        // Set null buts for the nested array:
-        let mut null_bits: [u8; 1] = [0; 1];
-        bit_util::set_bit(&mut null_bits, 0);
-        bit_util::set_bit(&mut null_bits, 1);
-        bit_util::set_bit(&mut null_bits, 2);
-
-        // Construct a list array from the above two
         let list_data_type = DataType::List(Box::new(DataType::Int32));
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(4)
             .add_buffer(value_offsets.clone())
             .add_child_data(value_data.clone())
-            .null_bit_buffer(Buffer::from(null_bits))
+            .null_bit_buffer(Buffer::from([0b00000111]))
             .build();
 
+        //  a = [[0, 1, 2], [3, 4, 5], [6, 7], null]
         let a = ListArray::from(list_data);
         let b = BooleanArray::from(vec![false, true, false, true]);
         let c = filter(&a, &b).unwrap();
@@ -407,11 +395,12 @@ mod tests {
 
         // result should be [[3, 4, 5], null]
         assert_eq!(2, d.len());
-        assert_eq!(true, d.is_null(1));
         assert_eq!(1, d.null_count());
+        assert_eq!(true, d.is_null(1));
+
         assert_eq!(0, d.value_offset(0));
-        assert_eq!(3, d.value_offset(1));
         assert_eq!(3, d.value_length(0));
+        assert_eq!(3, d.value_offset(1));
         assert_eq!(0, d.value_length(1));
         assert_eq!(
             Buffer::from(&[3, 4, 5].to_byte_slice()),
@@ -421,13 +410,13 @@ mod tests {
             Buffer::from(&[0, 3, 3].to_byte_slice()),
             d.data().buffers()[0].clone()
         );
-
         let inner_list = d.value(0);
         let inner_list = inner_list.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(3, inner_list.len());
         assert_eq!(0, inner_list.null_count());
-        assert_eq!(inner_list.value(0), 3);
-        assert_eq!(inner_list.value(1), 4);
-        assert_eq!(inner_list.value(2), 5);
+        assert_eq!(
+            inner_list,
+            &Int32Array::from(vec![3, 4, 5])
+        );
     }
 }

@@ -2541,7 +2541,6 @@ mod tests {
             .null_bit_buffer(Buffer::from(null_bits))
             .build();
         let list_array = ListArray::from(list_data);
-        println!("data null bit map from list arrray: {:?}", list_array.data().null_bitmap().as_ref().unwrap());
 
         let values = list_array.values();
         assert_eq!(value_data, values.data());
