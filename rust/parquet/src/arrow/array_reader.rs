@@ -169,13 +169,11 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
 
     /// Reads at most `batch_size` records into array.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        // println!("in primitive next_batch");
         let mut records_read = 0usize;
         while records_read < batch_size {
             let records_to_read = batch_size - records_read;
 
             let records_read_once = self.record_reader.read_records(records_to_read)?;
-            // println!("records read once: {:?}", records_read_once);
             records_read = records_read + records_read_once;
             // Record reader exhausted
             if records_read_once < records_to_read {
@@ -665,9 +663,7 @@ macro_rules! remove_timestamp_array_indices {
             Some(a) => a,
             _ => return Err(ParquetError::General(format!("Error generating next batch for ListArray: {:?} cannot be downcast to PrimitiveArray<>", $arr))),
         };
-        println!("null indices: {:?}", $indices);
         for i in 0..array_data.len() {
-            println!("arra_data value at {:?}: {:?}", i, array_data.value(i));
             if !$indices.contains(&i) {
                 if array_data.is_null(i) {
                     new_data_vec.push(None);
@@ -730,7 +726,6 @@ macro_rules! remove_string_array_indices {
         };
         for i in 0..array_data.len() {
             if !$indices.contains(&i) {
-                println!("arra_data value at {:?}: {:?}", i, array_data.value(i));
                 if array_data.is_null(i) {
                     new_data_vec.push(None);
                 } else {
@@ -874,10 +869,6 @@ impl ArrayReader for ListArrayReader {
         }
         let def_levels = self.item_reader.get_def_levels().unwrap();
         let rep_levels = self.item_reader.get_rep_levels().unwrap();
-
-        println!("def_levels: {:?}", def_levels);
-        println!("rep_levels: {:?}", rep_levels);
-        println!("next_batch_array: {:?}", next_batch_array);
 
         if !((def_levels.len() == rep_levels.len())
             && (rep_levels.len() == next_batch_array.len()))
@@ -1030,7 +1021,6 @@ impl ArrayReader for StructArrayReader {
             .iter_mut()
             .map(|reader| reader.next_batch(batch_size))
             .map(|batch| {
-                // println!("batch: {:?}", batch);
                 return batch;
             })
             .try_fold(
@@ -1040,7 +1030,7 @@ impl ArrayReader for StructArrayReader {
                     Ok(result)
                 },
             )?;
-        // println!("children array: {:?}", children_array);
+
         // check that array child data has same size
         let children_array_len =
             children_array.first().map(|arr| arr.len()).ok_or_else(|| {
@@ -1127,7 +1117,7 @@ impl ArrayReader for StructArrayReader {
         self.def_level_buffer = Some(def_level_data_buffer.freeze());
         self.rep_level_buffer = rep_level_data;
         let result_array = StructArray::from(array_data);
-        // println!("result_array: {:?}", result_array);
+
         return Ok(Arc::new(result_array));
     }
 
@@ -1223,7 +1213,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             if cur_type.name().to_string() != "item" {
                 new_context.path.append(vec![cur_type.name().to_string()]);
             }
-            // println!("path in primitive: {:?}", new_context.path);
             match cur_type.get_basic_info().repetition() {
                 Repetition::REPEATED => {
                     new_context.def_level += 1;
@@ -1256,7 +1245,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     ) -> Result<Option<Box<ArrayReader>>> {
         let mut new_context = context.clone();
         new_context.path.append(vec![cur_type.name().to_string()]);
-        // println!("path in struct: {:?}", new_context.path);
+
         if cur_type.get_basic_info().has_repetition() {
             match cur_type.get_basic_info().repetition() {
                 Repetition::REPEATED => {
@@ -1269,7 +1258,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
                 _ => (),
             }
         }
-        // println!("in visit struct, cur_type: {:?}", cur_type);
+
         if let Some(reader) = self.build_for_struct_type_inner(&cur_type, &new_context)? {
             if cur_type.get_basic_info().has_repetition()
                 && cur_type.get_basic_info().repetition() == Repetition::REPEATED
@@ -1311,7 +1300,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         let item_child = &list_child.get_fields()[0];
 
         new_context.path.append(vec![list_type.name().to_string()]);
-        // println!("path in visit list with item: {:?}", new_context.path);
 
         match list_type.get_basic_info().repetition() {
             Repetition::REPEATED => {
@@ -1391,7 +1379,6 @@ impl<'a> ArrayReaderBuilder {
 
     /// Check whether one column in included in this array reader builder.
     fn is_included(&self, t: &Type) -> bool {
-        // println!("included columns: {:?}", self.columns_included);
         self.columns_included.contains_key(&(t as *const Type))
     }
 
@@ -1474,8 +1461,6 @@ impl<'a> ArrayReaderBuilder {
 
         for child in cur_type.get_fields() {
             if let Some(child_reader) = self.dispatch(child.clone(), context)? {
-                // println!("child name: {:?}", child.name());
-                // println!("child data type: {:?}", child_reader.get_data_type().clone());
                 fields.push(Field::new(
                     child.name(),
                     child_reader.get_data_type().clone(),
@@ -1484,7 +1469,7 @@ impl<'a> ArrayReaderBuilder {
                 children_reader.push(child_reader);
             }
         }
-        // println!("fields: {:?}", fields);
+
         if !fields.is_empty() {
             let arrow_type = ArrowType::Struct(fields);
             Ok(Some(Box::new(StructArrayReader::new(
@@ -1612,7 +1597,6 @@ mod tests {
 
             // Read first 50 values, which are all from the first column chunck
             let array = array_reader.next_batch(50).unwrap();
-            println!("array before downcast for primitive: {:?}", array);
             let array = array
                 .as_any()
                 .downcast_ref::<PrimitiveArray<ArrowInt32>>()
