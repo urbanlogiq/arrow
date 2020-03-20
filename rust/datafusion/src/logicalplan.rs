@@ -251,12 +251,16 @@ impl Expr {
                 ref right,
                 ref op,
             } => match op {
-                Operator::Contains => left.get_type(schema), // TO DO: is this correct?? Morgan
+                Operator::Contains => {
+                    println!("getting type of contains");
+                    left.get_type(schema)
+                }, // TO DO: is this correct?? Morgan
                 Operator::Eq | Operator::NotEq => DataType::Boolean,
                 Operator::Lt | Operator::LtEq => DataType::Boolean,
                 Operator::Gt | Operator::GtEq => DataType::Boolean,
                 Operator::And | Operator::Or => DataType::Boolean,
                 _ => {
+                    println!("getting type of something else");
                     let left_type = left.get_type(schema);
                     let right_type = right.get_type(schema);
                     utils::get_supertype(&left_type, &right_type).unwrap()

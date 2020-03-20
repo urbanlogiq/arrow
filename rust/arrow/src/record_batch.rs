@@ -316,4 +316,32 @@ mod tests {
         assert_eq!(&DataType::List(Box::new(DataType::Int32)), record_batch.schema().field(0).data_type());
         assert_eq!(3, record_batch.column(0).data().len());
     }
+
+    #[test]
+    fn RENAME_NULLS_create_record_batch_with_list_column() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::List(Box::new(DataType::Int32)), false),
+        ]);
+
+        let values_builder = PrimitiveBuilder::<Int32Type>::new(10);
+        let mut builder = ListBuilder::new(values_builder);
+
+        builder.append(true).unwrap();
+        builder.append(true).unwrap();
+        builder.values().append_null().unwrap();
+        builder.append(true).unwrap();
+        let list_array = builder.finish();
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_array)])
+                .unwrap();
+
+
+        println!("column 0: {:?}", record_batch.column(0));
+
+        assert_eq!(3, record_batch.num_rows());
+        assert_eq!(1, record_batch.num_columns());
+        assert_eq!(&DataType::List(Box::new(DataType::Int32)), record_batch.schema().field(0).data_type());
+        assert_eq!(3, record_batch.column(0).data().len());
+    }
 }

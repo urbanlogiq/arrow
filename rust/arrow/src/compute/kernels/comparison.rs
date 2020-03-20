@@ -676,9 +676,18 @@ mod tests {
         builder.append(false).unwrap();
         builder.values().append_value("ipsum").unwrap();
         builder.append(true).unwrap();
+        builder.append(true).unwrap();
 
         //  [["Lorem", "ipsum", null], ["sit", "amet", "Lorem"], null, ["ipsum"]]
+        // value_offsets = [0, 3, 6, 6]
         let list_array = builder.finish();
+
+        println!("list array: {:?}", list_array);
+        for i in 0..list_array.len() {
+            println!("value offset at {:?}: {:?}", i, list_array.value_offset_at(i));
+            println!("value at {:?}: {:?}", i, list_array.value(i));
+            println!("null at {:?}: {:?}", i, list_array.is_null(i));
+        }
 
         let nulls = StringArray::try_from(vec![None, None, None, None]).unwrap();
         let nulls_result = contains_utf8(&nulls, &list_array).unwrap();
