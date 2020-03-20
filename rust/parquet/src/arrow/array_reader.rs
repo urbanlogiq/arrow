@@ -62,9 +62,37 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, Type, TypePtr,
 };
 use crate::schema::visitor::TypeVisitor;
+use arrow::array::{
+    Array, ArrayData, ArrayDataBuilder, ArrayDataRef, ArrayRef, BinaryArray,
+    BinaryBuilder, BooleanBufferBuilder, BufferBuilderTrait, FixedSizeBinaryArray,
+    FixedSizeBinaryBuilder, Int16BufferBuilder, ListArray, ListBuilder, PrimitiveArray,
+    PrimitiveBuilder, StringArray, StringBuilder, StructArray,
+};
+use arrow::buffer::{Buffer, MutableBuffer};
+use arrow::datatypes::{
+    BooleanType as ArrowBooleanType, DataType as ArrowType,
+    Date32Type as ArrowDate32Type, Date64Type as ArrowDate64Type,
+    DurationMicrosecondType as ArrowDurationMicrosecondType,
+    DurationMillisecondType as ArrowDurationMillisecondType,
+    DurationNanosecondType as ArrowDurationNanosecondType,
+    DurationSecondType as ArrowDurationSecondType, Field,
+    Float32Type as ArrowFloat32Type, Float64Type as ArrowFloat64Type,
+    Int16Type as ArrowInt16Type, Int32Type as ArrowInt32Type,
+    Int64Type as ArrowInt64Type, Int8Type as ArrowInt8Type,
+    Time32MillisecondType as ArrowTime32MillisecondType,
+    Time32SecondType as ArrowTime32SecondType,
+    Time64MicrosecondType as ArrowTime64MicrosecondType,
+    Time64NanosecondType as ArrowTime64NanosecondType, TimeUnit as ArrowTimeUnit,
+    TimestampMicrosecondType as ArrowTimestampMicrosecondType,
+    TimestampMillisecondType as ArrowTimestampMillisecondType,
+    TimestampNanosecondType as ArrowTimestampNanosecondType,
+    TimestampSecondType as ArrowTimestampSecondType, ToByteSlice,
+    UInt16Type as ArrowUInt16Type, UInt32Type as ArrowUInt32Type,
+    UInt64Type as ArrowUInt64Type, UInt8Type as ArrowUInt8Type,
+};
+use arrow::util::bit_util;
 use std::any::Any;
 use std::convert::TryFrom;
-use arrow::util::bit_util;
 
 /// Array reader reads parquet data into arrow array.
 pub trait ArrayReader {
@@ -533,33 +561,80 @@ macro_rules! build_empty_list_array_with_non_primitive_items {
 fn build_empty_list_array(item_type: ArrowType) -> Result<ArrayRef> {
     match item_type {
         ArrowType::UInt8 => build_empty_list_array_with_primitive_items!(ArrowUInt8Type),
-        ArrowType::UInt16 => build_empty_list_array_with_primitive_items!(ArrowUInt16Type),
-        ArrowType::UInt32 => build_empty_list_array_with_primitive_items!(ArrowUInt32Type),
-        ArrowType::UInt64 => build_empty_list_array_with_primitive_items!(ArrowUInt64Type),
+        ArrowType::UInt16 => {
+            build_empty_list_array_with_primitive_items!(ArrowUInt16Type)
+        }
+        ArrowType::UInt32 => {
+            build_empty_list_array_with_primitive_items!(ArrowUInt32Type)
+        }
+        ArrowType::UInt64 => {
+            build_empty_list_array_with_primitive_items!(ArrowUInt64Type)
+        }
         ArrowType::Int8 => build_empty_list_array_with_primitive_items!(ArrowInt8Type),
         ArrowType::Int16 => build_empty_list_array_with_primitive_items!(ArrowInt16Type),
         ArrowType::Int32 => build_empty_list_array_with_primitive_items!(ArrowInt32Type),
         ArrowType::Int64 => build_empty_list_array_with_primitive_items!(ArrowInt64Type),
-        ArrowType::Float32 => build_empty_list_array_with_primitive_items!(ArrowFloat32Type),
-        ArrowType::Float64 => build_empty_list_array_with_primitive_items!(ArrowFloat64Type),
-        ArrowType::Boolean => build_empty_list_array_with_primitive_items!(ArrowBooleanType),
-        ArrowType::Date32(_) => build_empty_list_array_with_primitive_items!(ArrowDate32Type),
-        ArrowType::Date64(_) => build_empty_list_array_with_primitive_items!(ArrowDate64Type),
-        ArrowType::Time32(ArrowTimeUnit::Second) => build_empty_list_array_with_primitive_items!(ArrowTime32SecondType),
-        ArrowType::Time32(ArrowTimeUnit::Millisecond) => build_empty_list_array_with_primitive_items!(ArrowTime32MillisecondType),
-        ArrowType::Time64(ArrowTimeUnit::Microsecond) => build_empty_list_array_with_primitive_items!(ArrowTime64MicrosecondType),
-        ArrowType::Time64(ArrowTimeUnit::Nanosecond) => build_empty_list_array_with_primitive_items!(ArrowTime64NanosecondType),
-        ArrowType::Duration(ArrowTimeUnit::Second) => build_empty_list_array_with_primitive_items!(ArrowDurationSecondType),
-        ArrowType::Duration(ArrowTimeUnit::Millisecond) => build_empty_list_array_with_primitive_items!(ArrowDurationMillisecondType),
-        ArrowType::Duration(ArrowTimeUnit::Microsecond) => build_empty_list_array_with_primitive_items!(ArrowDurationMicrosecondType),
-        ArrowType::Duration(ArrowTimeUnit::Nanosecond) => build_empty_list_array_with_primitive_items!(ArrowDurationNanosecondType),
-        ArrowType::Timestamp(ArrowTimeUnit::Second, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampSecondType),
-        ArrowType::Timestamp(ArrowTimeUnit::Millisecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampMillisecondType),
-        ArrowType::Timestamp(ArrowTimeUnit::Microsecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampMicrosecondType),
-        ArrowType::Timestamp(ArrowTimeUnit::Nanosecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampNanosecondType),
-        ArrowType::Utf8 => build_empty_list_array_with_non_primitive_items!(StringBuilder),
-        ArrowType::Binary => build_empty_list_array_with_non_primitive_items!(BinaryBuilder),
-        _ => Err(ParquetError::General(format!("ListArray of type List({:?}) is not supported by array_reader", item_type)))
+        ArrowType::Float32 => {
+            build_empty_list_array_with_primitive_items!(ArrowFloat32Type)
+        }
+        ArrowType::Float64 => {
+            build_empty_list_array_with_primitive_items!(ArrowFloat64Type)
+        }
+        ArrowType::Boolean => {
+            build_empty_list_array_with_primitive_items!(ArrowBooleanType)
+        }
+        ArrowType::Date32(_) => {
+            build_empty_list_array_with_primitive_items!(ArrowDate32Type)
+        }
+        ArrowType::Date64(_) => {
+            build_empty_list_array_with_primitive_items!(ArrowDate64Type)
+        }
+        ArrowType::Time32(ArrowTimeUnit::Second) => {
+            build_empty_list_array_with_primitive_items!(ArrowTime32SecondType)
+        }
+        ArrowType::Time32(ArrowTimeUnit::Millisecond) => {
+            build_empty_list_array_with_primitive_items!(ArrowTime32MillisecondType)
+        }
+        ArrowType::Time64(ArrowTimeUnit::Microsecond) => {
+            build_empty_list_array_with_primitive_items!(ArrowTime64MicrosecondType)
+        }
+        ArrowType::Time64(ArrowTimeUnit::Nanosecond) => {
+            build_empty_list_array_with_primitive_items!(ArrowTime64NanosecondType)
+        }
+        ArrowType::Duration(ArrowTimeUnit::Second) => {
+            build_empty_list_array_with_primitive_items!(ArrowDurationSecondType)
+        }
+        ArrowType::Duration(ArrowTimeUnit::Millisecond) => {
+            build_empty_list_array_with_primitive_items!(ArrowDurationMillisecondType)
+        }
+        ArrowType::Duration(ArrowTimeUnit::Microsecond) => {
+            build_empty_list_array_with_primitive_items!(ArrowDurationMicrosecondType)
+        }
+        ArrowType::Duration(ArrowTimeUnit::Nanosecond) => {
+            build_empty_list_array_with_primitive_items!(ArrowDurationNanosecondType)
+        }
+        ArrowType::Timestamp(ArrowTimeUnit::Second, _) => {
+            build_empty_list_array_with_primitive_items!(ArrowTimestampSecondType)
+        }
+        ArrowType::Timestamp(ArrowTimeUnit::Millisecond, _) => {
+            build_empty_list_array_with_primitive_items!(ArrowTimestampMillisecondType)
+        }
+        ArrowType::Timestamp(ArrowTimeUnit::Microsecond, _) => {
+            build_empty_list_array_with_primitive_items!(ArrowTimestampMicrosecondType)
+        }
+        ArrowType::Timestamp(ArrowTimeUnit::Nanosecond, _) => {
+            build_empty_list_array_with_primitive_items!(ArrowTimestampNanosecondType)
+        }
+        ArrowType::Utf8 => {
+            build_empty_list_array_with_non_primitive_items!(StringBuilder)
+        }
+        ArrowType::Binary => {
+            build_empty_list_array_with_non_primitive_items!(BinaryBuilder)
+        }
+        _ => Err(ParquetError::General(format!(
+            "ListArray of type List({:?}) is not supported by array_reader",
+            item_type
+        ))),
     }
 }
 
@@ -582,7 +657,6 @@ macro_rules! remove_primitive_array_indices {
         Ok(Arc::new(<PrimitiveArray<$item_type>>::from(new_data_vec)))
     }};
 }
-
 
 macro_rules! remove_timestamp_array_indices {
     ($arr: expr, $array_type:ty, $indices:expr, $time_unit:expr) => {{
@@ -671,37 +745,112 @@ macro_rules! remove_string_array_indices {
     }};
 }
 
-fn remove_indices(arr: ArrayRef, item_type: ArrowType, indices: Vec<usize>) -> Result<ArrayRef> {
+fn remove_indices(
+    arr: ArrayRef,
+    item_type: ArrowType,
+    indices: Vec<usize>,
+) -> Result<ArrayRef> {
     match item_type {
         ArrowType::UInt8 => remove_primitive_array_indices!(arr, ArrowUInt8Type, indices),
-        ArrowType::UInt16 => remove_primitive_array_indices!(arr, ArrowUInt16Type, indices),
-        ArrowType::UInt32 => remove_primitive_array_indices!(arr, ArrowUInt32Type, indices),
-        ArrowType::UInt64 => remove_primitive_array_indices!(arr, ArrowUInt64Type, indices),
+        ArrowType::UInt16 => {
+            remove_primitive_array_indices!(arr, ArrowUInt16Type, indices)
+        }
+        ArrowType::UInt32 => {
+            remove_primitive_array_indices!(arr, ArrowUInt32Type, indices)
+        }
+        ArrowType::UInt64 => {
+            remove_primitive_array_indices!(arr, ArrowUInt64Type, indices)
+        }
         ArrowType::Int8 => remove_primitive_array_indices!(arr, ArrowInt8Type, indices),
         ArrowType::Int16 => remove_primitive_array_indices!(arr, ArrowInt16Type, indices),
         ArrowType::Int32 => remove_primitive_array_indices!(arr, ArrowInt32Type, indices),
         ArrowType::Int64 => remove_primitive_array_indices!(arr, ArrowInt64Type, indices),
-        ArrowType::Float32 => remove_primitive_array_indices!(arr, ArrowFloat32Type, indices),
-        ArrowType::Float64 => remove_primitive_array_indices!(arr, ArrowFloat64Type, indices),
-        ArrowType::Boolean => remove_primitive_array_indices!(arr, ArrowBooleanType, indices),
-        ArrowType::Date32(_) => remove_primitive_array_indices!(arr, ArrowDate32Type, indices),
-        ArrowType::Date64(_) => remove_primitive_array_indices!(arr, ArrowDate64Type, indices),
-        ArrowType::Time32(ArrowTimeUnit::Second) => remove_primitive_array_indices!(arr, ArrowTime32SecondType, indices),
-        ArrowType::Time32(ArrowTimeUnit::Millisecond) => remove_primitive_array_indices!(arr, ArrowTime32MillisecondType, indices),
-        ArrowType::Time64(ArrowTimeUnit::Microsecond) => remove_primitive_array_indices!(arr, ArrowTime64MicrosecondType, indices),
-        ArrowType::Time64(ArrowTimeUnit::Nanosecond) => remove_primitive_array_indices!(arr, ArrowTime64NanosecondType, indices),
-        ArrowType::Duration(ArrowTimeUnit::Second) => remove_primitive_array_indices!(arr, ArrowDurationSecondType, indices),
-        ArrowType::Duration(ArrowTimeUnit::Millisecond) => remove_primitive_array_indices!(arr, ArrowDurationMillisecondType, indices),
-        ArrowType::Duration(ArrowTimeUnit::Microsecond) => remove_primitive_array_indices!(arr, ArrowDurationMicrosecondType, indices),
-        ArrowType::Duration(ArrowTimeUnit::Nanosecond) => remove_primitive_array_indices!(arr, ArrowDurationNanosecondType, indices),
-        ArrowType::Timestamp(ArrowTimeUnit::Second, time_unit) => remove_timestamp_array_indices!(arr, ArrowTimestampSecondType, indices, time_unit),
-        ArrowType::Timestamp(ArrowTimeUnit::Millisecond, time_unit) => remove_timestamp_array_indices!(arr, ArrowTimestampMillisecondType, indices, time_unit),
-        ArrowType::Timestamp(ArrowTimeUnit::Microsecond, time_unit) => remove_timestamp_array_indices!(arr, ArrowTimestampMicrosecondType, indices, time_unit),
-        ArrowType::Timestamp(ArrowTimeUnit::Nanosecond, time_unit) => remove_timestamp_array_indices!(arr, ArrowTimestampNanosecondType, indices, time_unit),
+        ArrowType::Float32 => {
+            remove_primitive_array_indices!(arr, ArrowFloat32Type, indices)
+        }
+        ArrowType::Float64 => {
+            remove_primitive_array_indices!(arr, ArrowFloat64Type, indices)
+        }
+        ArrowType::Boolean => {
+            remove_primitive_array_indices!(arr, ArrowBooleanType, indices)
+        }
+        ArrowType::Date32(_) => {
+            remove_primitive_array_indices!(arr, ArrowDate32Type, indices)
+        }
+        ArrowType::Date64(_) => {
+            remove_primitive_array_indices!(arr, ArrowDate64Type, indices)
+        }
+        ArrowType::Time32(ArrowTimeUnit::Second) => {
+            remove_primitive_array_indices!(arr, ArrowTime32SecondType, indices)
+        }
+        ArrowType::Time32(ArrowTimeUnit::Millisecond) => {
+            remove_primitive_array_indices!(arr, ArrowTime32MillisecondType, indices)
+        }
+        ArrowType::Time64(ArrowTimeUnit::Microsecond) => {
+            remove_primitive_array_indices!(arr, ArrowTime64MicrosecondType, indices)
+        }
+        ArrowType::Time64(ArrowTimeUnit::Nanosecond) => {
+            remove_primitive_array_indices!(arr, ArrowTime64NanosecondType, indices)
+        }
+        ArrowType::Duration(ArrowTimeUnit::Second) => {
+            remove_primitive_array_indices!(arr, ArrowDurationSecondType, indices)
+        }
+        ArrowType::Duration(ArrowTimeUnit::Millisecond) => {
+            remove_primitive_array_indices!(arr, ArrowDurationMillisecondType, indices)
+        }
+        ArrowType::Duration(ArrowTimeUnit::Microsecond) => {
+            remove_primitive_array_indices!(arr, ArrowDurationMicrosecondType, indices)
+        }
+        ArrowType::Duration(ArrowTimeUnit::Nanosecond) => {
+            remove_primitive_array_indices!(arr, ArrowDurationNanosecondType, indices)
+        }
+        ArrowType::Timestamp(ArrowTimeUnit::Second, time_unit) => {
+            remove_timestamp_array_indices!(
+                arr,
+                ArrowTimestampSecondType,
+                indices,
+                time_unit
+            )
+        }
+        ArrowType::Timestamp(ArrowTimeUnit::Millisecond, time_unit) => {
+            remove_timestamp_array_indices!(
+                arr,
+                ArrowTimestampMillisecondType,
+                indices,
+                time_unit
+            )
+        }
+        ArrowType::Timestamp(ArrowTimeUnit::Microsecond, time_unit) => {
+            remove_timestamp_array_indices!(
+                arr,
+                ArrowTimestampMicrosecondType,
+                indices,
+                time_unit
+            )
+        }
+        ArrowType::Timestamp(ArrowTimeUnit::Nanosecond, time_unit) => {
+            remove_timestamp_array_indices!(
+                arr,
+                ArrowTimestampNanosecondType,
+                indices,
+                time_unit
+            )
+        }
         ArrowType::Utf8 => remove_string_array_indices!(arr, StringArray, indices),
-        ArrowType::Binary => remove_binary_array_indices!(arr, BinaryArray, BinaryBuilder, indices),
-        ArrowType::FixedSizeBinary(size) => remove_fixed_size_binary_array_indices!(arr, FixedSizeBinaryArray, FixedSizeBinaryBuilder, indices, size),
-        _ => Err(ParquetError::General(format!("ListArray of type List({:?}) is not supported by array_reader", item_type)))
+        ArrowType::Binary => {
+            remove_binary_array_indices!(arr, BinaryArray, BinaryBuilder, indices)
+        }
+        ArrowType::FixedSizeBinary(size) => remove_fixed_size_binary_array_indices!(
+            arr,
+            FixedSizeBinaryArray,
+            FixedSizeBinaryBuilder,
+            indices,
+            size
+        ),
+        _ => Err(ParquetError::General(format!(
+            "ListArray of type List({:?}) is not supported by array_reader",
+            item_type
+        ))),
     }
 }
 
@@ -730,7 +879,9 @@ impl ArrayReader for ListArrayReader {
         println!("rep_levels: {:?}", rep_levels);
         println!("next_batch_array: {:?}", next_batch_array);
 
-        if !((def_levels.len() == rep_levels.len()) && (rep_levels.len() == next_batch_array.len())) {
+        if !((def_levels.len() == rep_levels.len())
+            && (rep_levels.len() == next_batch_array.len()))
+        {
             return Err(ArrowError(
                 "Expected item_reader def_level and rep_level arrays to have the same length as batch array".to_string(),
             ));
@@ -768,8 +919,7 @@ impl ArrayReader for ListArrayReader {
         offsets.push(cur_offset);
 
         let num_bytes = bit_util::ceil(offsets.len(), 8);
-        let mut null_buf =
-            MutableBuffer::new(num_bytes).with_bitset(num_bytes, false);
+        let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, false);
         let null_slice = null_buf.data_mut();
         let mut list_index = 0;
         for i in 0..rep_levels.len() {
@@ -920,7 +1070,9 @@ impl ArrayReader for StructArrayReader {
 
         for child in &self.children {
             if let Some(current_child_def_levels) = child.get_def_levels() {
-                if current_child_def_levels.len() != children_array_len && children_array.len() != 1 {
+                if current_child_def_levels.len() != children_array_len
+                    && children_array.len() != 1
+                {
                     return Err(general_err!("Child array length are not equal!"));
                 } else {
                     for i in 0..children_array_len {
@@ -1150,7 +1302,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     fn visit_list_with_item(
         &mut self,
         list_type: Rc<Type>,
-        item_type: &Type,
+        _item_type: &Type,
         context: &'a ArrayReaderBuilderContext,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let mut new_context = context.clone();
@@ -1183,15 +1335,20 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             _ => (),
         }
 
-        let item_reader = self.dispatch(item_child.clone(), &new_context).unwrap().unwrap();
+        let item_reader = self
+            .dispatch(item_child.clone(), &new_context)
+            .unwrap()
+            .unwrap();
         let item_type = item_reader.get_data_type().clone();
 
         match item_type {
             ArrowType::List(_)
             | ArrowType::FixedSizeList(_, _)
             | ArrowType::Struct(_)
-            | ArrowType::Dictionary(_, _)
-            => Err(ArrowError(format!("reading List({:?}) into arrow not supported yet", item_type))),
+            | ArrowType::Dictionary(_, _) => Err(ArrowError(format!(
+                "reading List({:?}) into arrow not supported yet",
+                item_type
+            ))),
             _ => {
                 let arrow_type = ArrowType::List(Box::new(item_type.clone()));
                 Ok(Some(Box::new(ListArrayReader::new(
@@ -1358,7 +1515,7 @@ mod tests {
     use crate::util::test_common::{get_test_file, make_pages};
     use arrow::array::{Array, ArrayRef, PrimitiveArray, StructArray, ListArray};
     use arrow::datatypes::{
-        DataType as ArrowType, Field, Int32Type as ArrowInt32, UInt32Type as ArrowUInt32,
+        DataType as ArrowType, Field, Int32Type as ArrowInt32, Int64Type as ArrowInt64, UInt32Type as ArrowUInt32,
         UInt64Type as ArrowUInt64,
     };
     use rand::distributions::uniform::SampleUniform;
@@ -1786,36 +1943,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_create_array_reader_with_nulls() {
-        let file = get_test_file("nulls.snappy.parquet");
-        let file_reader = Rc::new(SerializedFileReader::new(file).unwrap());
-
-        let mut array_reader = build_array_reader(
-            file_reader.metadata().file_metadata().schema_descr_ptr(),
-            vec![0usize].into_iter(),
-            file_reader,
-        )
-        .unwrap();
-
-        // Create arrow types
-        let arrow_type = ArrowType::Struct(vec![Field::new(
-            "b_struct",
-            ArrowType::Struct(vec![Field::new("b_c_int", ArrowType::Int32, true)]),
-            true,
-        )]);
-        // println!("here");
-        assert_eq!(array_reader.get_data_type(), &arrow_type);
-        let array = array_reader.next_batch(1024).unwrap();
-        // let array = array
-        //     .as_any()
-        //     .downcast_ref::<ListArray>()
-        //     .unwrap();
-
-        // println!("array: {:?}", array);
-    }
-
-    #[test]
+    #[test] //TODO: this test file is not in the testing submodule yet (Morgan 03-18-2020)
     fn test_create_list_array_reader() {
         let file = get_test_file("tiny_int_array.parquet");
         let file_reader = Rc::new(SerializedFileReader::new(file).unwrap());
@@ -1831,49 +1959,30 @@ mod tests {
             ArrowType::List(Box::new(ArrowType::Int64)),
             true,
         )]);
-
         assert_eq!(array_reader.get_data_type(), &arrow_type);
-        println!("after assert_eq");
-        let array = array_reader.next_batch(10).unwrap();
-        println!("array before downcast: {:?}", array);
-        let array = array
+
+        let next_batch = array_reader.next_batch(1024).unwrap();
+
+        // parquets with primitive columns also produce a StructArray -- each struct is a field
+        let struct_array = next_batch.as_any().downcast_ref::<StructArray>().unwrap();
+        let array = struct_array
+            .column(0)
             .as_any()
-            .downcast_ref::<StructArray>()
+            .downcast_ref::<ListArray>()
             .unwrap();
 
-        println!("array: {:?}", array);
-    }
+        assert_eq!(8, array.len());
 
-    #[test]
-    fn test_float_create_array_reader() {
-        let file = get_test_file("float_normal_test_file.parquet");
-        let file_reader = Rc::new(SerializedFileReader::new(file).unwrap());
-        let mut array_reader = build_array_reader(
-            file_reader.metadata().file_metadata().schema_descr_ptr(),
-            vec![0usize].into_iter(),
-            file_reader,
-        )
-        .unwrap();
-        let array = array_reader.next_batch(10).unwrap();
-        println!("array before downcast: {:?}", array);
+        let sublist_0 = array.value(0);
+        let sublist_0 = sublist_0
+            .as_any()
+            .downcast_ref::<PrimitiveArray<ArrowInt64>>()
+            .unwrap();
 
-        // // lists are represented as structs containing a single optional field named "list",
-        // // which contains a single repeated field called "item"
-        // let item_field = Field::new("item", ArrowType::Int64, true);
-        // let list_field = Field::new("list", ArrowType::Struct(vec![item_field]), true);
-        // let arrow_type = ArrowType::Struct(vec![Field::new(
-        //     "int_array",
-        //     ArrowType::List(Box::new(ArrowType::Int64)),
-        //     true,
-        // )]);
-        // //
-        // // assert_eq!(array_reader.get_data_type(), &arrow_type);
-        // let array = array_reader.next_batch(0).unwrap();
-        // // let array = array
-        // //     .as_any()
-        // //     .downcast_ref::<ListArray>()
-        // //     .unwrap();
-        // //
-        // // println!("array: {:?}", array);
+        assert_eq!(2, sublist_0.len());
+        assert_eq!(false, sublist_0.is_null(0));
+        assert_eq!(false, sublist_0.is_null(1));
+        assert_eq!(7000, sublist_0.value(0));
+        assert_eq!(7001, sublist_0.value(1));
     }
 }

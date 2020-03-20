@@ -32,16 +32,16 @@ use arrow::array::{
 };
 use arrow::array::{
     Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
-    Int8Builder, StringBuilder, UInt16Builder, UInt32Builder, UInt64Builder,
-    UInt8Builder, ListArray,
+    Int8Builder, ListArray, StringBuilder, UInt16Builder, UInt32Builder, UInt64Builder,
+    UInt8Builder,
 };
 use arrow::compute;
 use arrow::compute::kernels::arithmetic::{add, divide, multiply, subtract};
 use arrow::compute::kernels::boolean::{and, or};
 use arrow::compute::kernels::cast::cast;
-use arrow::compute::kernels::comparison::{eq, gt, gt_eq, lt, lt_eq, neq,
-    eq_utf8, gt_eq_utf8, gt_utf8, like_utf8, lt_eq_utf8, lt_utf8, neq_utf8, nlike_utf8,
-    contains, contains_utf8,
+use arrow::compute::kernels::comparison::{
+    contains, contains_utf8, eq, eq_utf8, gt, gt_eq, gt_eq_utf8, gt_utf8, like_utf8, lt,
+    lt_eq, lt_eq_utf8, lt_utf8, neq, neq_utf8, nlike_utf8,
 };
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -931,7 +931,9 @@ macro_rules! list_array_op {
             DataType::UInt64 => compute_list_array_op!($LEFT, $RIGHT, $OP, UInt64Array),
             DataType::Float32 => compute_list_array_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_list_array_op!($LEFT, $RIGHT, $OP, Float64Array),
-            DataType::Utf8 => compute_list_array_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::Utf8 => {
+                compute_list_array_utf8_op!($LEFT, $RIGHT, $OP, StringArray)
+            }
             other => Err(ExecutionError::General(format!(
                 "Unsupported data type {:?} for Contains operator",
                 other
@@ -1332,9 +1334,14 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::execution::physical_plan::common::get_scalar_value;
+<<<<<<< HEAD
     use arrow::array::{PrimitiveArray, StringArray, Time64NanosecondArray, ArrayData};
     use arrow::datatypes::*;
+=======
+    use arrow::array::{ArrayData, PrimitiveArray, StringArray};
+>>>>>>> fit null bitmap array_reader logic and cleanup
     use arrow::buffer::Buffer;
+    use arrow::datatypes::*;
 
     #[test]
     fn binary_comparison() -> Result<()> {

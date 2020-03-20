@@ -105,7 +105,7 @@ fn rewrite_expr(expr: &Expr, schema: &Schema) -> Result<Expr> {
                             op: op.clone(),
                             right: Arc::new(right.cast_to(&right_type, schema)?),
                         });
-                    },
+                    }
                     _ => {
                         let super_type = utils::get_supertype(&left_type, &right_type)?;
                         return Ok(Expr::BinaryExpr {
@@ -113,7 +113,7 @@ fn rewrite_expr(expr: &Expr, schema: &Schema) -> Result<Expr> {
                             op: op.clone(),
                             right: Arc::new(right.cast_to(&super_type, schema)?),
                         });
-                    },
+                    }
                 };
             }
         }

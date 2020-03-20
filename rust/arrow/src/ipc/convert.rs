@@ -693,7 +693,6 @@ mod tests {
         // read back fields
         let ipc = ipc::get_root_as_schema(fb.finished_data());
         let schema2 = fb_to_schema(ipc);
-        println!("schema2: {:?}", schema2.field(0));
         assert_eq!(schema, schema2);
     }
 
