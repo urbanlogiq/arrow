@@ -29,7 +29,7 @@ use std::vec::Vec;
 use arrow::array::{
     ArrayDataBuilder, ArrayDataRef, ArrayRef, BooleanBufferBuilder, BufferBuilderTrait,
     Int16BufferBuilder, StructArray, ListArray, ArrayData, PrimitiveArray, Array, ListBuilder,
-    StringBuilder, BinaryBuilder, PrimitiveBuilder,
+    StringBuilder, BinaryBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, PrimitiveBuilder, StringArray, BinaryArray, TimestampSecondArray as ArrowTimestampSecondArray
 };
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{
@@ -63,6 +63,8 @@ use crate::schema::types::{
 };
 use crate::schema::visitor::TypeVisitor;
 use std::any::Any;
+use std::convert::TryFrom;
+use arrow::util::bit_util;
 
 /// Array reader reads parquet data into arrow array.
 pub trait ArrayReader {
@@ -482,6 +484,7 @@ where
 pub struct ListArrayReader {
     item_reader: Box<dyn ArrayReader>,
     data_type: ArrowType,
+    item_type: ArrowType,
     list_def_level: i16,
     list_rep_level: i16,
     def_level_buffer: Option<Buffer>,
@@ -493,12 +496,14 @@ impl ListArrayReader {
     pub fn new(
         item_reader: Box<dyn ArrayReader>,
         data_type: ArrowType,
+        item_type: ArrowType,
         def_level: i16,
         rep_level: i16,
     ) -> Self {
         Self {
             item_reader,
             data_type,
+            item_type,
             list_def_level: def_level,
             list_rep_level: rep_level,
             def_level_buffer: None,
@@ -510,6 +515,15 @@ impl ListArrayReader {
 macro_rules! build_empty_list_array_with_primitive_items {
     ($item_type:ident) => {{
         let values_builder = PrimitiveBuilder::<$item_type>::new(0);
+        let mut builder = ListBuilder::new(values_builder);
+        let empty_list_array = builder.finish();
+        Ok(Arc::new(empty_list_array))
+    }};
+}
+
+macro_rules! build_empty_list_array_with_non_primitive_items {
+    ($builder:ident) => {{
+        let values_builder = $builder::new(0);
         let mut builder = ListBuilder::new(values_builder);
         let empty_list_array = builder.finish();
         Ok(Arc::new(empty_list_array))
@@ -543,18 +557,150 @@ fn build_empty_list_array(item_type: ArrowType) -> Result<ArrayRef> {
         ArrowType::Timestamp(ArrowTimeUnit::Millisecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampMillisecondType),
         ArrowType::Timestamp(ArrowTimeUnit::Microsecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampMicrosecondType),
         ArrowType::Timestamp(ArrowTimeUnit::Nanosecond, _) => build_empty_list_array_with_primitive_items!(ArrowTimestampNanosecondType),
-        ArrowType::Utf8 => {
-            let values_builder = StringBuilder::new(0);
-            let mut builder = ListBuilder::new(values_builder);
-            let empty_list_array = builder.finish();
-            Ok(Arc::new(empty_list_array))
-        },
-        ArrowType::Binary => {
-            let values_builder = BinaryBuilder::new(0);
-            let mut builder = ListBuilder::new(values_builder);
-            let empty_list_array = builder.finish();
-            Ok(Arc::new(empty_list_array))
-        },
+        ArrowType::Utf8 => build_empty_list_array_with_non_primitive_items!(StringBuilder),
+        ArrowType::Binary => build_empty_list_array_with_non_primitive_items!(BinaryBuilder),
+        _ => Err(ParquetError::General(format!("ListArray of type List({:?}) is not supported by array_reader", item_type)))
+    }
+}
+
+macro_rules! remove_primitive_array_indices {
+    ($arr: expr, $item_type:ty, $indices:expr) => {{
+        let mut new_data_vec = Vec::new();
+        let array_data = match $arr.as_any().downcast_ref::<PrimitiveArray<$item_type>>() {
+            Some(a) => a,
+            _ => return Err(ParquetError::General(format!("Error generating next batch for ListArray: {:?} cannot be downcast to PrimitiveArray", $arr))),
+        };
+        for i in 0..array_data.len() {
+            if !$indices.contains(&i) {
+                if array_data.is_null(i) {
+                    new_data_vec.push(None);
+                } else {
+                    new_data_vec.push(Some(array_data.value(i).into()));
+                }
+            }
+        }
+        Ok(Arc::new(<PrimitiveArray<$item_type>>::from(new_data_vec)))
+    }};
+}
+
+
+macro_rules! remove_timestamp_array_indices {
+    ($arr: expr, $array_type:ty, $indices:expr, $time_unit:expr) => {{
+        let mut new_data_vec = Vec::new();
+        let array_data = match $arr.as_any().downcast_ref::<PrimitiveArray<$array_type>>() {
+            Some(a) => a,
+            _ => return Err(ParquetError::General(format!("Error generating next batch for ListArray: {:?} cannot be downcast to PrimitiveArray<>", $arr))),
+        };
+        println!("null indices: {:?}", $indices);
+        for i in 0..array_data.len() {
+            println!("arra_data value at {:?}: {:?}", i, array_data.value(i));
+            if !$indices.contains(&i) {
+                if array_data.is_null(i) {
+                    new_data_vec.push(None);
+                } else {
+                    new_data_vec.push(Some(array_data.value(i).into()));
+                }
+            }
+        }
+        Ok(Arc::new(<PrimitiveArray<$array_type>>::from_opt_vec(new_data_vec, $time_unit)))
+    }};
+}
+
+macro_rules! remove_binary_array_indices {
+    ($arr: expr, $array_type:ty, $item_builder:ident, $indices:expr) => {{
+        let array_data = match $arr.as_any().downcast_ref::<$array_type>() {
+            Some(a) => a,
+            _ => return Err(ParquetError::General(format!("Error generating next batch for ListArray: {:?} cannot be downcast to PrimitiveArray", $arr))),
+        };
+        let mut builder = BinaryBuilder::new(array_data.len());
+
+        for i in 0..array_data.len() {
+            if !$indices.contains(&i) {
+                if array_data.is_null(i) {
+                    builder.append_null()?;
+                } else {
+                    builder.append_value(array_data.value(i))?;
+                }
+            }
+        }
+        Ok(Arc::new(builder.finish()))
+    }};
+}
+
+macro_rules! remove_fixed_size_binary_array_indices {
+    ($arr: expr, $array_type:ty, $item_builder:ident, $indices:expr, $len:expr) => {{
+        let array_data = match $arr.as_any().downcast_ref::<$array_type>() {
+            Some(a) => a,
+            _ => return Err(ParquetError::General(format!("Error generating next batch for ListArray: {:?} cannot be downcast to PrimitiveArray", $arr))),
+        };
+        let mut builder = FixedSizeBinaryBuilder::new(array_data.len(), $len);
+        for i in 0..array_data.len() {
+            if !$indices.contains(&i) {
+                if array_data.is_null(i) {
+                    builder.append_null()?;
+                } else {
+                    builder.append_value(array_data.value(i))?;
+                }
+            }
+        }
+        Ok(Arc::new(builder.finish()))
+    }};
+}
+
+macro_rules! remove_string_array_indices {
+    ($arr: expr, $array_type:ty, $indices:expr) => {{
+        let mut new_data_vec = Vec::new();
+        let array_data = match $arr.as_any().downcast_ref::<$array_type>() {
+            Some(a) => a,
+            _ => return Err(ParquetError::General(format!("Error generating next batch for ListArray: {:?} cannot be downcast to PrimitiveArray<>", $arr))),
+        };
+        for i in 0..array_data.len() {
+            if !$indices.contains(&i) {
+                println!("arra_data value at {:?}: {:?}", i, array_data.value(i));
+                if array_data.is_null(i) {
+                    new_data_vec.push(None);
+                } else {
+                    new_data_vec.push(Some(array_data.value(i).into()));
+                }
+            }
+        }
+        match <$array_type>::try_from(new_data_vec.clone()) {
+            Ok(a) => Ok(Arc::new(a)),
+            _ => Err(ParquetError::General(format!("Error generating next batch for ListArray: non-primitive Arrow array cannot be built from {:?}", new_data_vec)))
+        }
+    }};
+}
+
+fn remove_indices(arr: ArrayRef, item_type: ArrowType, indices: Vec<usize>) -> Result<ArrayRef> {
+    match item_type {
+        ArrowType::UInt8 => remove_primitive_array_indices!(arr, ArrowUInt8Type, indices),
+        ArrowType::UInt16 => remove_primitive_array_indices!(arr, ArrowUInt16Type, indices),
+        ArrowType::UInt32 => remove_primitive_array_indices!(arr, ArrowUInt32Type, indices),
+        ArrowType::UInt64 => remove_primitive_array_indices!(arr, ArrowUInt64Type, indices),
+        ArrowType::Int8 => remove_primitive_array_indices!(arr, ArrowInt8Type, indices),
+        ArrowType::Int16 => remove_primitive_array_indices!(arr, ArrowInt16Type, indices),
+        ArrowType::Int32 => remove_primitive_array_indices!(arr, ArrowInt32Type, indices),
+        ArrowType::Int64 => remove_primitive_array_indices!(arr, ArrowInt64Type, indices),
+        ArrowType::Float32 => remove_primitive_array_indices!(arr, ArrowFloat32Type, indices),
+        ArrowType::Float64 => remove_primitive_array_indices!(arr, ArrowFloat64Type, indices),
+        ArrowType::Boolean => remove_primitive_array_indices!(arr, ArrowBooleanType, indices),
+        ArrowType::Date32(_) => remove_primitive_array_indices!(arr, ArrowDate32Type, indices),
+        ArrowType::Date64(_) => remove_primitive_array_indices!(arr, ArrowDate64Type, indices),
+        ArrowType::Time32(ArrowTimeUnit::Second) => remove_primitive_array_indices!(arr, ArrowTime32SecondType, indices),
+        ArrowType::Time32(ArrowTimeUnit::Millisecond) => remove_primitive_array_indices!(arr, ArrowTime32MillisecondType, indices),
+        ArrowType::Time64(ArrowTimeUnit::Microsecond) => remove_primitive_array_indices!(arr, ArrowTime64MicrosecondType, indices),
+        ArrowType::Time64(ArrowTimeUnit::Nanosecond) => remove_primitive_array_indices!(arr, ArrowTime64NanosecondType, indices),
+        ArrowType::Duration(ArrowTimeUnit::Second) => remove_primitive_array_indices!(arr, ArrowDurationSecondType, indices),
+        ArrowType::Duration(ArrowTimeUnit::Millisecond) => remove_primitive_array_indices!(arr, ArrowDurationMillisecondType, indices),
+        ArrowType::Duration(ArrowTimeUnit::Microsecond) => remove_primitive_array_indices!(arr, ArrowDurationMicrosecondType, indices),
+        ArrowType::Duration(ArrowTimeUnit::Nanosecond) => remove_primitive_array_indices!(arr, ArrowDurationNanosecondType, indices),
+        ArrowType::Timestamp(ArrowTimeUnit::Second, time_unit) => remove_timestamp_array_indices!(arr, ArrowTimestampSecondType, indices, time_unit),
+        ArrowType::Timestamp(ArrowTimeUnit::Millisecond, time_unit) => remove_timestamp_array_indices!(arr, ArrowTimestampMillisecondType, indices, time_unit),
+        ArrowType::Timestamp(ArrowTimeUnit::Microsecond, time_unit) => remove_timestamp_array_indices!(arr, ArrowTimestampMicrosecondType, indices, time_unit),
+        ArrowType::Timestamp(ArrowTimeUnit::Nanosecond, time_unit) => remove_timestamp_array_indices!(arr, ArrowTimestampNanosecondType, indices, time_unit),
+        ArrowType::Utf8 => remove_string_array_indices!(arr, StringArray, indices),
+        ArrowType::Binary => remove_binary_array_indices!(arr, BinaryArray, BinaryBuilder, indices),
+        ArrowType::FixedSizeBinary(size) => remove_fixed_size_binary_array_indices!(arr, FixedSizeBinaryArray, FixedSizeBinaryBuilder, indices, size),
         _ => Err(ParquetError::General(format!("ListArray of type List({:?}) is not supported by array_reader", item_type)))
     }
 }
@@ -572,74 +718,83 @@ impl ArrayReader for ListArrayReader {
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         let next_batch_array = self.item_reader.next_batch(batch_size).unwrap();
+        let item_type = self.item_reader.get_data_type().clone();
 
         if next_batch_array.len() == 0 {
-            self.def_level_buffer = None;
-            self.rep_level_buffer = None;
-            let item_type = self.item_reader.get_data_type().clone();
             return build_empty_list_array(item_type);
         }
-        // let item_array = self.item_reader.next_batch(batch_size);
-        // println!("item array: {:?}", item_array);
         let def_levels = self.item_reader.get_def_levels().unwrap();
         let rep_levels = self.item_reader.get_rep_levels().unwrap();
 
+        println!("def_levels: {:?}", def_levels);
+        println!("rep_levels: {:?}", rep_levels);
+        println!("next_batch_array: {:?}", next_batch_array);
 
-        // println!("item def_levels: {:?}, item rep_levels: {:?}", def_levels, rep_levels);
-        // println!("list def_levels: {:?}, list rep_levels: {:?}", self.get_def_levels(), self.get_rep_levels());
+        if !((def_levels.len() == rep_levels.len()) && (rep_levels.len() == next_batch_array.len())) {
+            return Err(ArrowError(
+                "Expected item_reader def_level and rep_level arrays to have the same length as batch array".to_string(),
+            ));
+        }
 
-        // check that array child data has same size
-        // let array_ref_next_batch: ArrayRef = next_batch_array;
-        let children_array_len = next_batch_array.len();
-        // calculate struct def level data
-        let buffer_size = children_array_len * size_of::<i16>();
-        let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
-        def_level_data_buffer.resize(buffer_size)?;
-
-        let def_level_data = unsafe {
-            let ptr = transmute::<*const u8, *mut i16>(def_level_data_buffer.raw_data());
-            from_raw_parts_mut(ptr, children_array_len)
+        // Need to remove from the values array the nulls that represent null lists rather than null items
+        // null lists have def_level = 0
+        let mut null_list_indices: Vec<usize> = Vec::new();
+        for i in 0..def_levels.len() {
+            if def_levels[i] == 0 {
+                null_list_indices.push(i);
+            }
+        }
+        let batch_values = match null_list_indices.len() {
+            0 => next_batch_array.clone(),
+            _ => remove_indices(next_batch_array.clone(), item_type, null_list_indices)?,
         };
 
-        def_level_data
-            .iter_mut()
-            .for_each(|v| *v = self.list_def_level);
-
-        // let list_depth = 1;
-        // let values_depth_level = def_levels[0];
+        // null list has def_level = 0
+        // empty list has def_level = 1
+        // null item in a list has def_level = 2
+        // non-null item has def_level = 3
+        // first item in each list has rep_level = 0, subsequent items have rep_level = 1
 
         let mut offsets = Vec::new();
         let mut cur_offset = 0;
-        for rep_level in rep_levels {
-            if rep_level == &(0 as i16) {
+        for i in 0..rep_levels.len() {
+            if rep_levels[i] == (0 as i16) {
                 offsets.push(cur_offset)
             }
-            cur_offset = cur_offset + 1;
+            if def_levels[i] > 0 {
+                cur_offset = cur_offset + 1;
+            }
         }
         offsets.push(cur_offset);
 
+        let num_bytes = bit_util::ceil(offsets.len(), 8);
+        let mut null_buf =
+            MutableBuffer::new(num_bytes).with_bitset(num_bytes, false);
+        let null_slice = null_buf.data_mut();
+        let mut list_index = 0;
+        for i in 0..rep_levels.len() {
+            if rep_levels[i] == (0 as i16) && def_levels[i] != (0 as i16) {
+                bit_util::set_bit(null_slice, list_index);
+            }
+            if rep_levels[i] == (0 as i16) {
+                list_index = list_index + 1;
+            }
+        }
         let value_offsets = Buffer::from(&offsets.to_byte_slice());
-        let value_data: ArrayDataRef = next_batch_array.data();
-        // println!("offsets: {:?}", offsets);
-        // println!("value offsets: {:?}, value data: {:?}", value_offsets, value_data);
-        // println!("len offsets: {:?}", offsets.len());
+
+        // null list has def_level = 0
+        let null_count = def_levels.iter().filter(|x| x == &&(0 as i16)).count();
+
         let list_data = ArrayData::builder(self.get_data_type().clone())
             .len(offsets.len() - 1)
             .add_buffer(value_offsets.clone())
-            .add_child_data(value_data)
+            .add_child_data(batch_values.data())
+            .null_bit_buffer(null_buf.freeze())
+            .null_count(null_count)
+            .offset(next_batch_array.offset())
             .build();
 
-
-        let rep_levels = self.item_reader.get_rep_levels().unwrap();
-        let mut buffer = Int16BufferBuilder::new(children_array_len);
-        buffer.append_slice(rep_levels)?;
-        let rep_level_data = Some(buffer.finish());
-
-        self.def_level_buffer = Some(def_level_data_buffer.freeze());
-        self.rep_level_buffer = rep_level_data;
-
         let result_array = ListArray::from(list_data);
-        // println!("result array length: {:?}", result_array.len());
         return Ok(Arc::new(result_array));
     }
 
@@ -765,7 +920,6 @@ impl ArrayReader for StructArrayReader {
 
         for child in &self.children {
             if let Some(current_child_def_levels) = child.get_def_levels() {
-                // TO DO : FIX THIS CONDITION
                 if current_child_def_levels.len() != children_array_len && children_array.len() != 1 {
                     return Err(general_err!("Child array length are not equal!"));
                 } else {
@@ -875,42 +1029,6 @@ where
     .build_array_reader()
 }
 
-// /// list type is a special case of struct type (see https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
-// fn is_list_type(cur_type: Rc<Type>) -> bool {
-//     let fields = cur_type.get_fields();
-//     if cur_type.is_group() && cur_type.get_basic_info().has_repetition() && cur_type.name() == "list" && fields.len() == 1 {
-//         let field = &fields[0];
-//         if field.name() == "item" && field.get_basic_info().has_repetition() && field.is_primitive() {
-//             return true;
-//         }
-//     }
-//     false
-// }
-//
-// /// list type is a special case of struct type (see https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
-// fn is_list_type_test(cur_type: &Type) -> bool {
-//     let fields = cur_type.get_fields();
-//     if cur_type.is_group() && cur_type.get_basic_info().has_repetition() && cur_type.name() == "list" && fields.len() == 1 {
-//         let field = &fields[0];
-//         if field.name() == "item" && field.get_basic_info().has_repetition() && field.is_primitive() {
-//             return true;
-//         }
-//     }
-//     false
-// }
-//
-// /// get list item type from list struct (see https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
-// fn get_list_item_type(cur_type: &Type) -> LogicalType {
-//     let fields = cur_type.get_fields();
-//     if cur_type.is_group() && cur_type.get_basic_info().has_repetition() && cur_type.name() == "list" && fields.len() == 1 {
-//         let field = &fields[0];
-//         if field.name() == "item" && field.get_basic_info().has_repetition() && field.is_primitive() {
-//             return field.get_basic_info().logical_type();
-//         }
-//     }
-//     LogicalType::INT_8
-// }
-
 /// Used to build array reader.
 struct ArrayReaderBuilder {
     root_schema: TypePtr,
@@ -999,7 +1117,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
                 _ => (),
             }
         }
-        println!("in visit struct, cur_type: {:?}", cur_type);
+        // println!("in visit struct, cur_type: {:?}", cur_type);
         if let Some(reader) = self.build_for_struct_type_inner(&cur_type, &new_context)? {
             if cur_type.get_basic_info().has_repetition()
                 && cur_type.get_basic_info().repetition() == Repetition::REPEATED
@@ -1066,13 +1184,25 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         }
 
         let item_reader = self.dispatch(item_child.clone(), &new_context).unwrap().unwrap();
-        let arrow_type = ArrowType::List(Box::new(item_reader.get_data_type().clone()));
-        Ok(Some(Box::new(ListArrayReader::new(
-            item_reader,
-            arrow_type,
-            new_context.def_level,
-            new_context.rep_level,
-        ))))
+        let item_type = item_reader.get_data_type().clone();
+
+        match item_type {
+            ArrowType::List(_)
+            | ArrowType::FixedSizeList(_, _)
+            | ArrowType::Struct(_)
+            | ArrowType::Dictionary(_, _)
+            => Err(ArrowError(format!("reading List({:?}) into arrow not supported yet", item_type))),
+            _ => {
+                let arrow_type = ArrowType::List(Box::new(item_type.clone()));
+                Ok(Some(Box::new(ListArrayReader::new(
+                    item_reader,
+                    arrow_type,
+                    item_type,
+                    new_context.def_level,
+                    new_context.rep_level,
+                ))))
+            }
+        }
     }
 }
 
@@ -1187,8 +1317,8 @@ impl<'a> ArrayReaderBuilder {
 
         for child in cur_type.get_fields() {
             if let Some(child_reader) = self.dispatch(child.clone(), context)? {
-                println!("child name: {:?}", child.name());
-                println!("child data type: {:?}", child_reader.get_data_type().clone());
+                // println!("child name: {:?}", child.name());
+                // println!("child data type: {:?}", child_reader.get_data_type().clone());
                 fields.push(Field::new(
                     child.name(),
                     child_reader.get_data_type().clone(),
