@@ -48,7 +48,6 @@ macro_rules! compare_op {
             $right.data().null_bitmap(),
             |a, b| a & b,
         )?;
-        println!("null bit buffer: {:?}", null_bit_buffer);
 
         let mut result = BooleanBufferBuilder::new($left.len());
         for i in 0..$left.len() {
@@ -599,9 +598,6 @@ mod tests {
         let a = Int32Array::from(vec![None, None, Some(1)]);
         let b = Int32Array::from(vec![None, Some(1), Some(1)]);
         let c = gt_eq(&a, &b).unwrap();
-        println!("c: {:?}", c);
-        println!("c.null_count: {:?}", c.null_count());
-        println!("c.value(0): {:?}", c.value(0));
         assert_eq!(0, c.null_count());
         assert_eq!(true, c.value(0));
         assert_eq!(false, c.value(1));
@@ -681,13 +677,6 @@ mod tests {
         //  [["Lorem", "ipsum", null], ["sit", "amet", "Lorem"], null, ["ipsum"]]
         // value_offsets = [0, 3, 6, 6]
         let list_array = builder.finish();
-
-        println!("list array: {:?}", list_array);
-        for i in 0..list_array.len() {
-            println!("value offset at {:?}: {:?}", i, list_array.value_offset_at(i));
-            println!("value at {:?}: {:?}", i, list_array.value(i));
-            println!("null at {:?}: {:?}", i, list_array.is_null(i));
-        }
 
         let nulls = StringArray::try_from(vec![None, None, None, None]).unwrap();
         let nulls_result = contains_utf8(&nulls, &list_array).unwrap();

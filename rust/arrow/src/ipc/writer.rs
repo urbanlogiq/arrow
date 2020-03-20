@@ -469,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn TODO_RENAME_test_write_file_with_array_field() {
+    fn test_write_file_with_array_field() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::List(Box::new(DataType::Int32)), false),
         ]);
