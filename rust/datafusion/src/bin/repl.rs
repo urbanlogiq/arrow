@@ -156,24 +156,12 @@ macro_rules! make_string {
 
 macro_rules! make_string_from_list {
     ($column: ident, $row: ident) => {{
-        println!("column: {:?}", $column);
-
         if $column.is_null($row) {
             Ok(format!("null"))
         } else {
-            let column_array = $column
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .unwrap();
-            let list = column_array.value($row);
-            Ok(format!("{:?}", list))
+            let column_array = $column.as_any().downcast_ref::<ListArray>().unwrap();
+            Ok(format!("{:?}", column_array.value($row)))
         }
-
-        // if list.len() == 0 {
-        //     Ok(format!("null"))
-        // } else {
-        //     Ok(format!("{:?}", list))
-        // }
     }};
 }
 
@@ -222,9 +210,7 @@ fn str_value(column: ArrayRef, row: usize) -> Result<String> {
         DataType::Time64(unit) if *unit == TimeUnit::Nanosecond => {
             make_string!(Time64NanosecondArray, column, row)
         }
-        DataType::List(_) => {
-            make_string_from_list!(column, row)
-        }
+        DataType::List(_) => make_string_from_list!(column, row),
         _ => Err(ExecutionError::ExecutionError(format!(
             "Unsupported {:?} type for repl.",
             column.data_type()

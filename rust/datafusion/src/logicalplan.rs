@@ -251,10 +251,7 @@ impl Expr {
                 ref right,
                 ref op,
             } => match op {
-                Operator::Contains => {
-                    println!("getting type of contains");
-                    left.get_type(schema)
-                }, // TO DO: is this correct?? Morgan
+                Operator::Contains => left.get_type(schema), // TODO: What should this be? (Morgan 03-17-2020)
                 Operator::Eq | Operator::NotEq => DataType::Boolean,
                 Operator::Lt | Operator::LtEq => DataType::Boolean,
                 Operator::Gt | Operator::GtEq => DataType::Boolean,

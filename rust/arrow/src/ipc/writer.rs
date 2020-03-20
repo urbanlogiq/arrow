@@ -414,7 +414,6 @@ mod tests {
     use crate::datatypes::Field;
     use crate::ipc::reader::*;
     use crate::util::integration_util::*;
-    use crate::record_batch::RecordBatchReader;
     use std::env;
     use std::fs::File;
     use std::io::Read;
@@ -466,63 +465,6 @@ mod tests {
             }
         }
         // panic!("intentional failure");
-    }
-
-    #[test]
-    fn test_write_file_with_array_field() {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::List(Box::new(DataType::Int32)), false),
-        ]);
-
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
-            .build();
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
-
-        // Construct a list array from the above two
-        let list_data_type = DataType::List(Box::new(DataType::Int32));
-        let list_data = ArrayData::builder(list_data_type.clone())
-            .len(3)
-            .add_buffer(value_offsets.clone())
-            .add_child_data(value_data.clone())
-            .build();
-        let a = ListArray::from(list_data);
-
-        let batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])
-                .unwrap();
-        {
-            let file = File::create("target/debug/testdata/test_array.arrow_file").unwrap();
-            let mut writer = FileWriter::try_new(file, &schema).unwrap();
-
-            writer.write(&batch).unwrap();
-            // this is inside a block to test the implicit finishing of the file on `Drop`
-        }
-
-        {
-            let file =
-                File::open(format!("target/debug/testdata/{}.arrow_file", "test_array"))
-                    .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
-            while let Ok(Some(read_batch)) = reader.next() {
-                // println!("schema: {:?}", read_batch.schema());
-                // println!("columns: {:?}", read_batch.columns());
-                read_batch
-                    .columns()
-                    .iter()
-                    .zip(batch.columns())
-                    .for_each(|(a, b)| {
-                        assert_eq!(a.data_type(), b.data_type());
-                        assert_eq!(a.len(), b.len());
-                        assert_eq!(a.null_count(), b.null_count());
-                    });
-            }
-        }
     }
 
     #[test]
@@ -608,51 +550,6 @@ mod tests {
             let arrow_json = read_gzip_json(path);
             assert!(arrow_json.equals_reader(&mut reader));
         });
-    }
-
-    #[test]
-    fn test_write_stream_with_int_array_column() {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::List(Box::new(DataType::Int32)), false),
-        ]);
-
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
-            .build();
-
-        // Construct a buffer for value offsets, for the nested array:
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
-
-        // Construct a list array from the above two
-        let list_data_type = DataType::List(Box::new(DataType::Int32));
-        let list_data = ArrayData::builder(list_data_type.clone())
-            .len(3)
-            .add_buffer(value_offsets.clone())
-            .add_child_data(value_data.clone())
-            .build();
-        let a = ListArray::from(list_data);
-
-        let batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])
-                .unwrap();
-
-        {
-            let file = File::create("target/debug/testdata/test_array.stream")
-                .unwrap();
-            let mut writer = StreamWriter::try_new(file, &schema).unwrap();
-            writer.write(&batch).unwrap();
-            writer.finish().unwrap();
-        }
-
-        let file =
-            File::open("target/debug/testdata/test_array.stream").unwrap();
-        let mut reader = StreamReader::try_new(file).unwrap();
-        let new_batch = reader.next_batch().unwrap().unwrap();
-        println!("new batch: {:?}", new_batch.column(0));
-        println!("new schema: {:?}", reader.schema());
     }
 
     /// Read gzipped JSON file
