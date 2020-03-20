@@ -318,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn RENAME_NULLS_create_record_batch_with_list_column() {
+    fn create_record_batch_with_list_column_nulls() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::List(Box::new(DataType::Int32)), false),
         ]);
@@ -326,22 +326,44 @@ mod tests {
         let values_builder = PrimitiveBuilder::<Int32Type>::new(10);
         let mut builder = ListBuilder::new(values_builder);
 
-        builder.append(true).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_null().unwrap();
         builder.values().append_null().unwrap();
         builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        builder.append(true).unwrap();
+
+        // [[null, null], null, []]
         let list_array = builder.finish();
 
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_array)])
                 .unwrap();
 
-
-        println!("column 0: {:?}", record_batch.column(0));
-
         assert_eq!(3, record_batch.num_rows());
         assert_eq!(1, record_batch.num_columns());
         assert_eq!(&DataType::List(Box::new(DataType::Int32)), record_batch.schema().field(0).data_type());
         assert_eq!(3, record_batch.column(0).data().len());
+
+        assert_eq!(false, record_batch.column(0).is_null(0));
+        assert_eq!(true, record_batch.column(0).is_null(1));
+        assert_eq!(false, record_batch.column(0).is_null(2));
+
+        let col_as_list_array = record_batch.column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+
+        assert_eq!(2, col_as_list_array.value(0).len());
+        assert_eq!(0, col_as_list_array.value(2).len());
+
+        let sublist_0_val = col_as_list_array.value(0);
+        let sublist_0 = sublist_0_val
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        assert_eq!(true, sublist_0.is_null(0));
+        assert_eq!(true, sublist_0.is_null(1));
+
     }
 }
