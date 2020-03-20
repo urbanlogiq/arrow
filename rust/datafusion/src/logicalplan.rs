@@ -257,7 +257,6 @@ impl Expr {
                 Operator::Gt | Operator::GtEq => DataType::Boolean,
                 Operator::And | Operator::Or => DataType::Boolean,
                 _ => {
-                    println!("getting type of something else");
                     let left_type = left.get_type(schema);
                     let right_type = right.get_type(schema);
                     utils::get_supertype(&left_type, &right_type).unwrap()
