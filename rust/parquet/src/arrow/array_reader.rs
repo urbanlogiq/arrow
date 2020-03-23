@@ -26,22 +26,6 @@ use std::slice::from_raw_parts_mut;
 use std::sync::Arc;
 use std::vec::Vec;
 
-use arrow::array::{
-    ArrayDataBuilder, ArrayDataRef, ArrayRef, BooleanBufferBuilder, BufferBuilderTrait,
-    Int16BufferBuilder, StructArray, ListArray, ArrayData, PrimitiveArray, Array, ListBuilder,
-    StringBuilder, BinaryBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, PrimitiveBuilder, StringArray, BinaryArray, TimestampSecondArray as ArrowTimestampSecondArray
-};
-use arrow::buffer::{Buffer, MutableBuffer};
-use arrow::datatypes::{
-    DataType as ArrowType, Field, IntervalUnit, ToByteSlice, Int64Type as ArrowInt64Type, TimeUnit as ArrowTimeUnit,
-    UInt8Type as ArrowUInt8Type, UInt16Type as ArrowUInt16Type, UInt32Type as ArrowUInt32Type, UInt64Type as ArrowUInt64Type,
-    Int8Type as ArrowInt8Type, Int16Type as ArrowInt16Type, Int32Type as ArrowInt32Type, Int64Type as ArrowInt64Type, Float32Type as ArrowFloat32Type,
-    Float64Type as ArrowFloat64Type, BooleanType as ArrowBooleanType, Date32Type as ArrowDate32Type, Date64Type as ArrowDate64Type, Time32SecondType as ArrowTime32SecondType,
-    Time32MillisecondType as ArrowTime32MillisecondType, Time64MicrosecondType as ArrowTime64MicrosecondType, Time64NanosecondType as ArrowTime64NanosecondType,
-    DurationSecondType as ArrowDurationSecondType, DurationMillisecondType as ArrowDurationMillisecondType, DurationMicrosecondType as ArrowDurationMicrosecondType,
-    DurationNanosecondType as ArrowDurationNanosecondType, TimestampSecondType as ArrowTimestampSecondType, TimestampMillisecondType as ArrowTimestampMillisecondType,
-    TimestampMicrosecondType as ArrowTimestampMicrosecondType, TimestampNanosecondType as ArrowTimestampNanosecondType,
-};
 use crate::arrow::converter::{
     BinaryConverter, BoolConverter, Converter, Float32Converter, Float64Converter,
     Int16Converter, Int32Converter, Int64Converter, Int8Converter, Int96Converter,
@@ -78,7 +62,7 @@ use arrow::datatypes::{
     DurationSecondType as ArrowDurationSecondType, Field,
     Float32Type as ArrowFloat32Type, Float64Type as ArrowFloat64Type,
     Int16Type as ArrowInt16Type, Int32Type as ArrowInt32Type,
-    Int64Type as ArrowInt64Type, Int8Type as ArrowInt8Type,
+    Int64Type as ArrowInt64Type, Int8Type as ArrowInt8Type, IntervalUnit,
     Time32MillisecondType as ArrowTime32MillisecondType,
     Time32SecondType as ArrowTime32SecondType,
     Time64MicrosecondType as ArrowTime64MicrosecondType,
@@ -90,6 +74,7 @@ use arrow::datatypes::{
     UInt16Type as ArrowUInt16Type, UInt32Type as ArrowUInt32Type,
     UInt64Type as ArrowUInt64Type, UInt8Type as ArrowUInt8Type,
 };
+
 use arrow::util::bit_util;
 use std::any::Any;
 use std::convert::TryFrom;
@@ -1498,10 +1483,10 @@ mod tests {
     use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
     use crate::util::test_common::page_util::InMemoryPageIterator;
     use crate::util::test_common::{get_test_file, make_pages};
-    use arrow::array::{Array, ArrayRef, PrimitiveArray, StructArray, ListArray};
+    use arrow::array::{Array, ArrayRef, ListArray, PrimitiveArray, StructArray};
     use arrow::datatypes::{
-        DataType as ArrowType, Field, Int32Type as ArrowInt32, Int64Type as ArrowInt64, UInt32Type as ArrowUInt32,
-        UInt64Type as ArrowUInt64,
+        DataType as ArrowType, Field, Int32Type as ArrowInt32, Int64Type as ArrowInt64,
+        UInt32Type as ArrowUInt32, UInt64Type as ArrowUInt64,
     };
     use rand::distributions::uniform::SampleUniform;
     use std::any::Any;

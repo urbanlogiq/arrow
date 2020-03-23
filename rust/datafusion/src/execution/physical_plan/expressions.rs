@@ -1300,12 +1300,7 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::execution::physical_plan::common::get_scalar_value;
-<<<<<<< HEAD
-    use arrow::array::{PrimitiveArray, StringArray, Time64NanosecondArray, ArrayData};
-    use arrow::datatypes::*;
-=======
-    use arrow::array::{ArrayData, PrimitiveArray, StringArray};
->>>>>>> fit null bitmap array_reader logic and cleanup
+    use arrow::array::{ArrayData, PrimitiveArray, StringArray, Time64NanosecondArray};
     use arrow::buffer::Buffer;
     use arrow::datatypes::*;
 
