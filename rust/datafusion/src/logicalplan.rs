@@ -265,7 +265,7 @@ impl Expr {
                 Operator::Lt | Operator::LtEq => Ok(DataType::Boolean),
                 Operator::Gt | Operator::GtEq => Ok(DataType::Boolean),
                 Operator::And | Operator::Or => Ok(DataType::Boolean),
-                Operator::Contains => Ok(left.get_type(schema)),
+                Operator::Contains => Ok(DataType::Boolean),
                 _ => {
                     let left_type = left.get_type(schema)?;
                     let right_type = right.get_type(schema)?;
