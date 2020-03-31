@@ -1401,7 +1401,7 @@ mod tests {
         )?;
 
         // expression: "a >] b"
-        let contains = binary(col(0), Operator::Contains, col(1));
+        let contains = binary(col(0, &schema), Operator::Contains, col(1, &schema));
 
         let result = contains.evaluate(&batch)?;
         assert_eq!(result.len(), 3);

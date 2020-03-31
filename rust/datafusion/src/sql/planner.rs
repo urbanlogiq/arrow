@@ -580,7 +580,7 @@ mod tests {
         quick_test(
             "SELECT * from person",
             "Projection: #0, #1, #2, #3, #4, #5, #6\
-            \n  TableScan: person projection=None",
+             \n  TableScan: person projection=None",
         );
     }
 
