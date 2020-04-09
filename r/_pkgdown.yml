@@ -67,15 +67,17 @@ reference:
   - Partitioning
   - Expression
   - Scanner
+  - FileFormat
 - title: Reading and writing files
   contents:
+  - read_feather
+  - read_ipc_stream
+  - read_parquet
   - read_delim_arrow
   - read_json_arrow
-  - read_feather
-  - read_parquet
-  - read_table
-  - write_arrow
   - write_feather
+  - write_ipc_stream
+  - write_to_raw
   - write_parquet
 - title: C++ reader/writer interface
   contents:
@@ -99,7 +101,6 @@ reference:
   - RecordBatch
   - Table
   - read_message
-  - read_record_batch
 - title: Arrow data types and schema
   contents:
   - Schema
@@ -126,6 +127,7 @@ reference:
   - MemoryPool
   - default_memory_pool
   - FileSystem
+  - FileInfo
   - FileStats
   - FileSelector
 - title: Installation helpers

@@ -1122,16 +1122,16 @@ struct TreeEvaluator::Impl {
     ARROW_ASSIGN_OR_RAISE(auto rhs, Evaluate(*expr.right_operand()));
 
     if (lhs.is_scalar()) {
-      std::shared_ptr<Array> lhs_array;
-      RETURN_NOT_OK(MakeArrayFromScalar(ctx_.memory_pool(), *lhs.scalar(),
-                                        batch_.num_rows(), &lhs_array));
+      ARROW_ASSIGN_OR_RAISE(
+          auto lhs_array,
+          MakeArrayFromScalar(*lhs.scalar(), batch_.num_rows(), ctx_.memory_pool()));
       lhs = Datum(std::move(lhs_array));
     }
 
     if (rhs.is_scalar()) {
-      std::shared_ptr<Array> rhs_array;
-      RETURN_NOT_OK(MakeArrayFromScalar(ctx_.memory_pool(), *rhs.scalar(),
-                                        batch_.num_rows(), &rhs_array));
+      ARROW_ASSIGN_OR_RAISE(
+          auto rhs_array,
+          MakeArrayFromScalar(*rhs.scalar(), batch_.num_rows(), ctx_.memory_pool()));
       rhs = Datum(std::move(rhs_array));
     }
 
@@ -1242,10 +1242,10 @@ Result<std::shared_ptr<RecordBatch>> TreeEvaluator::Filter(
     MemoryPool* pool) const {
   if (selection.is_array()) {
     auto selection_array = selection.make_array();
-    std::shared_ptr<RecordBatch> filtered;
+    compute::Datum filtered;
     compute::FunctionContext ctx{pool};
-    RETURN_NOT_OK(compute::Filter(&ctx, *batch, *selection_array, &filtered));
-    return std::move(filtered);
+    RETURN_NOT_OK(compute::Filter(&ctx, batch, selection_array, {}, &filtered));
+    return filtered.record_batch();
   }
 
   if (!selection.is_scalar() || selection.type()->id() != Type::BOOL) {

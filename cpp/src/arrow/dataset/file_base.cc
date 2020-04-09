@@ -118,6 +118,14 @@ Result<std::shared_ptr<FileSystemDataset>> FileSystemDataset::Make(
       std::move(filesystem), std::move(forest), std::move(partitions)));
 }
 
+Result<std::shared_ptr<Dataset>> FileSystemDataset::ReplaceSchema(
+    std::shared_ptr<Schema> schema) const {
+  RETURN_NOT_OK(CheckProjectable(*schema_, *schema));
+  return std::shared_ptr<Dataset>(
+      new FileSystemDataset(std::move(schema), partition_expression_, format_,
+                            filesystem_, forest_, partitions_));
+}
+
 std::vector<std::string> FileSystemDataset::files() const {
   std::vector<std::string> files;
 
@@ -190,25 +198,8 @@ FragmentIterator FileSystemDataset::GetFragmentsImpl(
     }
 
     // if possible, extract a partition key and pass it to the projector
-    auto projector = &options[ref.i]->projector;
-    {
-      int index = -1;
-      std::shared_ptr<Scalar> value_to_materialize;
-
-      DCHECK_OK(KeyValuePartitioning::VisitKeys(
-          *partition, [&](const std::string& name, const std::shared_ptr<Scalar>& value) {
-            if (index != -1) return Status::OK();
-
-            index = projector->schema()->GetFieldIndex(name);
-            if (index != -1) value_to_materialize = value;
-
-            return Status::OK();
-          }));
-
-      if (index != -1) {
-        RETURN_NOT_OK(projector->SetDefaultValue(index, std::move(value_to_materialize)));
-      }
-    }
+    RETURN_NOT_OK(KeyValuePartitioning::SetDefaultValuesFromKeys(
+        *partition, &options[ref.i]->projector));
 
     if (ref.info().IsFile()) {
       // generate a fragment for this file

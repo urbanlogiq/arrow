@@ -63,7 +63,10 @@ cdef class ChunkedArray(_PandasConvertible):
         type_format = object.__repr__(self)
         return '{0}\n{1}'.format(type_format, str(self))
 
-    def format(self, int indent=0, int window=10):
+    def to_string(self, int indent=0, int window=10):
+        """
+        Render a "pretty-printed" string representation of the ChunkedArray
+        """
         cdef:
             c_string result
 
@@ -78,8 +81,14 @@ cdef class ChunkedArray(_PandasConvertible):
 
         return frombytes(result)
 
+    def format(self, **kwargs):
+        import warnings
+        warnings.warn('ChunkedArray.format is deprecated, '
+                      'use ChunkedArray.to_string')
+        return self.to_string(**kwargs)
+
     def __str__(self):
-        return self.format()
+        return self.to_string()
 
     def validate(self, *, full=False):
         """
@@ -280,7 +289,7 @@ cdef class ChunkedArray(_PandasConvertible):
             CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
 
         with nogil:
-            check_status(self.chunked_array.Flatten(pool, &flattened))
+            flattened = GetResultValue(self.chunked_array.Flatten(pool))
 
         return [pyarrow_wrap_chunked_array(col) for col in flattened]
 
@@ -342,6 +351,62 @@ cdef class ChunkedArray(_PandasConvertible):
             result = self.chunked_array.Slice(offset, length)
 
         return pyarrow_wrap_chunked_array(result)
+
+    def filter(self, mask, object null_selection_behavior="drop"):
+        """
+        Filter the chunked array with a boolean mask.
+
+        Parameters
+        ----------
+        mask : Array or ChunkedArray
+            The boolean mask indicating which values to extract.
+        null_selection_behavior : str, default 'drop'
+            Configure the behavior on encountering a null slot in the mask.
+            Allowed values are 'drop' and 'emit_null'.
+
+            - 'drop': nulls will be treated as equivalent to False.
+            - 'emit_null': nulls will result in a null in the output.
+
+        Returns
+        -------
+        ChunkedArray
+
+        Examples
+        --------
+        >>> import pyarrow as pa
+        >>> arr = pa.chunked_array([["a", "b"], ["c", None, "e"]])
+        >>> mask = pa.chunked_array([[True, False], [None, False, True]])
+
+        >>> arr.filter(mask)
+        <pyarrow.lib.ChunkedArray object at 0x7f8070081ea8>
+        [
+          [
+            "a"
+          ],
+          [
+            "e"
+          ]
+        ]
+        """
+        cdef:
+            CDatum filter
+            CDatum out
+            CFilterOptions options
+
+        options = _convert_filter_option(null_selection_behavior)
+
+        mask = asarray(mask)
+        if isinstance(mask, Array):
+            filter = CDatum((<Array> mask).sp_array)
+        else:
+            filter = CDatum((<ChunkedArray> mask).sp_chunked_array)
+
+        with nogil:
+            check_status(
+                FilterKernel(_context(), CDatum(self.sp_chunked_array),
+                             filter, options, &out))
+
+        return wrap_datum(out)
 
     @property
     def num_chunks(self):
@@ -444,13 +509,11 @@ cdef _schema_from_arrays(arrays, names, metadata, shared_ptr[CSchema]* schema):
         Py_ssize_t K = len(arrays)
         c_string c_name
         shared_ptr[CDataType] c_type
-        shared_ptr[CKeyValueMetadata] c_meta
+        shared_ptr[const CKeyValueMetadata] c_meta
         vector[shared_ptr[CField]] c_fields
 
     if metadata is not None:
-        if not isinstance(metadata, dict):
-            raise TypeError('Metadata must be an instance of dict')
-        c_meta = pyarrow_unwrap_metadata(metadata)
+        c_meta = KeyValueMetadata(metadata).unwrap()
 
     if K == 0:
         schema.reset(new CSchema(c_fields, c_meta))
@@ -459,7 +522,8 @@ cdef _schema_from_arrays(arrays, names, metadata, shared_ptr[CSchema]* schema):
     c_fields.resize(K)
 
     if names is None:
-        raise ValueError('Must pass names or schema to Table.from_arrays')
+        raise ValueError('Must pass names or schema when constructing '
+                         'Table or RecordBatch.')
 
     if len(names) != K:
         raise ValueError('Length of names ({}) does not match '
@@ -542,8 +606,16 @@ cdef class RecordBatch(_PandasConvertible):
         except TypeError:
             return NotImplemented
 
+    def to_string(self, show_metadata=False):
+        # Use less verbose schema output.
+        schema_as_string = self.schema.to_string(
+            show_field_metadata=show_metadata,
+            show_schema_metadata=show_metadata
+        )
+        return 'pyarrow.{}\n{}'.format(type(self).__name__, schema_as_string)
+
     def __repr__(self):
-        return 'pyarrow.{}\n{}'.format(type(self).__name__, str(self.schema))
+        return self.to_string()
 
     def validate(self, *, full=False):
         """
@@ -583,14 +655,11 @@ cdef class RecordBatch(_PandasConvertible):
         shallow_copy : RecordBatch
         """
         cdef:
-            shared_ptr[CKeyValueMetadata] c_meta
+            shared_ptr[const CKeyValueMetadata] c_meta
             shared_ptr[CRecordBatch] c_batch
 
-        if metadata is not None:
-            if not isinstance(metadata, dict):
-                raise TypeError('Metadata must be an instance of dict')
-            c_meta = pyarrow_unwrap_metadata(metadata)
-
+        metadata = ensure_metadata(metadata, allow_none=True)
+        c_meta = pyarrow_unwrap_metadata(metadata)
         with nogil:
             c_batch = self.batch.ReplaceSchemaMetadata(c_meta)
 
@@ -696,8 +765,8 @@ cdef class RecordBatch(_PandasConvertible):
         options.memory_pool = maybe_unbox_memory_pool(memory_pool)
 
         with nogil:
-            check_status(SerializeRecordBatch(deref(self.batch),
-                                              options, &buffer))
+            buffer = GetResultValue(
+                SerializeRecordBatch(deref(self.batch), options))
         return pyarrow_wrap_buffer(buffer)
 
     def slice(self, offset=0, length=None):
@@ -728,14 +797,61 @@ cdef class RecordBatch(_PandasConvertible):
 
         return pyarrow_wrap_batch(result)
 
-    def equals(self, RecordBatch other):
+    def filter(self, Array mask, object null_selection_behavior="drop"):
+        """
+        Filter the record batch with a boolean mask.
+
+        Parameters
+        ----------
+        mask : Array
+            The boolean mask indicating which rows to extract.
+        null_selection_behavior : str, default 'drop'
+            Configure the behavior on encountering a null slot in the mask.
+            Allowed values are 'drop' and 'emit_null'.
+
+            - 'drop': nulls will be treated as equivalent to False.
+            - 'emit_null': nulls will result in a null in the output.
+
+        Returns
+        -------
+        RecordBatch
+        """
+        cdef:
+            CDatum out
+            CFilterOptions options
+
+        options = _convert_filter_option(null_selection_behavior)
+
+        with nogil:
+            check_status(
+                FilterKernel(_context(), CDatum(self.sp_batch),
+                             CDatum(mask.sp_array), options, &out)
+            )
+
+        return wrap_datum(out)
+
+    def equals(self, RecordBatch other, bint check_metadata=False):
+        """
+        Check if contents of two record batches are equal.
+
+        Parameters
+        ----------
+        other : pyarrow.RecordBatch
+            RecordBatch to compare against.
+        check_metadata : bool, default False
+            Whether schema metadata equality should be checked as well.
+
+        Returns
+        -------
+        are_equal : bool
+        """
         cdef:
             CRecordBatch* this_batch = self.batch
             CRecordBatch* other_batch = other.batch
             c_bool result
 
         with nogil:
-            result = this_batch.Equals(deref(other_batch))
+            result = this_batch.Equals(deref(other_batch), check_metadata)
 
         return result
 
@@ -897,8 +1013,8 @@ cdef class RecordBatch(_PandasConvertible):
         cdef:
             shared_ptr[CRecordBatch] c_record_batch
         with nogil:
-            check_status(CRecordBatch.FromStructArray(struct_array.sp_array,
-                                                      &c_record_batch))
+            c_record_batch = GetResultValue(
+                CRecordBatch.FromStructArray(struct_array.sp_array))
         return pyarrow_wrap_batch(c_record_batch)
 
     def _export_to_c(self, uintptr_t out_ptr, uintptr_t out_schema_ptr=0):
@@ -1013,11 +1129,19 @@ cdef class Table(_PandasConvertible):
         raise TypeError("Do not call Table's constructor directly, use one of "
                         "the `Table.from_*` functions instead.")
 
+    def to_string(self, show_metadata=False):
+        # Use less verbose schema output.
+        schema_as_string = self.schema.to_string(
+            show_field_metadata=show_metadata,
+            show_schema_metadata=show_metadata
+        )
+        return 'pyarrow.{}\n{}'.format(type(self).__name__, schema_as_string)
+
     def __repr__(self):
         if self.table == NULL:
             raise ValueError("Table's internal pointer is NULL, do not use "
                              "any methods or attributes on this object")
-        return 'pyarrow.{}\n{}'.format(type(self).__name__, str(self.schema))
+        return self.to_string()
 
     cdef void init(self, const shared_ptr[CTable]& table):
         self.sp_table = table
@@ -1086,6 +1210,46 @@ cdef class Table(_PandasConvertible):
 
         return pyarrow_wrap_table(result)
 
+    def filter(self, mask, object null_selection_behavior="drop"):
+        """
+        Filter the rows of the table with a boolean mask.
+
+        Parameters
+        ----------
+        mask : Array or ChunkedArray
+            The boolean mask indicating which rows to extract.
+        null_selection_behavior : str, default 'drop'
+            Configure the behavior on encountering a null slot in the mask.
+            Allowed values are 'drop' and 'emit_null'.
+
+            - 'drop': nulls will be treated as equivalent to False.
+            - 'emit_null': nulls will result in a null in the output.
+
+        Returns
+        -------
+        Table
+        """
+        cdef:
+            CDatum filter
+            CDatum out
+            CFilterOptions options
+
+        options = _convert_filter_option(null_selection_behavior)
+
+        mask = asarray(mask)
+        if isinstance(mask, Array):
+            filter = CDatum((<Array> mask).sp_array)
+        else:
+            filter = CDatum((<ChunkedArray> mask).sp_chunked_array)
+
+        with nogil:
+            check_status(
+                FilterKernel(_context(), CDatum(self.sp_table),
+                             filter, options, &out)
+            )
+
+        return wrap_datum(out)
+
     def replace_schema_metadata(self, metadata=None):
         """
         EXPERIMENTAL: Create shallow copy of table by replacing schema
@@ -1101,14 +1265,11 @@ cdef class Table(_PandasConvertible):
         shallow_copy : Table
         """
         cdef:
-            shared_ptr[CKeyValueMetadata] c_meta
+            shared_ptr[const CKeyValueMetadata] c_meta
             shared_ptr[CTable] c_table
 
-        if metadata is not None:
-            if not isinstance(metadata, dict):
-                raise TypeError('Metadata must be an instance of dict')
-            c_meta = pyarrow_unwrap_metadata(metadata)
-
+        metadata = ensure_metadata(metadata, allow_none=True)
+        c_meta = pyarrow_unwrap_metadata(metadata)
         with nogil:
             c_table = self.table.ReplaceSchemaMetadata(c_meta)
 
@@ -1133,7 +1294,7 @@ cdef class Table(_PandasConvertible):
             CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
 
         with nogil:
-            check_status(self.table.Flatten(pool, &flattened))
+            flattened = GetResultValue(self.table.Flatten(pool))
 
         return pyarrow_wrap_table(flattened)
 
@@ -1158,7 +1319,7 @@ cdef class Table(_PandasConvertible):
             CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
 
         with nogil:
-            check_status(self.table.CombineChunks(pool, &combined))
+            combined = GetResultValue(self.table.CombineChunks(pool))
 
         return pyarrow_wrap_table(combined)
 
@@ -1424,8 +1585,8 @@ cdef class Table(_PandasConvertible):
             c_schema = schema.sp_schema
 
         with nogil:
-            check_status(CTable.FromRecordBatches(c_schema, c_batches,
-                                                  &c_table))
+            c_table = GetResultValue(
+                CTable.FromRecordBatches(c_schema, move(c_batches)))
 
         return pyarrow_wrap_table(c_table)
 
@@ -1542,11 +1703,16 @@ cdef class Table(_PandasConvertible):
         pyarrow.ChunkedArray
         """
         if isinstance(i, (bytes, str)):
-            field_index = self.schema.get_field_index(i)
-            if field_index < 0:
-                raise KeyError("Column {} does not exist in table".format(i))
+            field_indices = self.schema.get_all_field_indices(i)
+
+            if len(field_indices) == 0:
+                raise KeyError("Field \"{}\" does not exist in table schema"
+                               .format(i))
+            elif len(field_indices) > 1:
+                raise KeyError("Field \"{}\" exists {} times in table schema"
+                               .format(i, len(field_indices)))
             else:
-                return self._column(field_index)
+                return self._column(field_indices[0])
         elif isinstance(i, int):
             return self._column(i)
         else:
@@ -1683,9 +1849,8 @@ cdef class Table(_PandasConvertible):
             c_field = field(field_, c_arr.type)
 
         with nogil:
-            check_status(self.table.AddColumn(i, c_field.sp_field,
-                                              c_arr.sp_chunked_array,
-                                              &c_table))
+            c_table = GetResultValue(self.table.AddColumn(
+                i, c_field.sp_field, c_arr.sp_chunked_array))
 
         return pyarrow_wrap_table(c_table)
 
@@ -1725,7 +1890,7 @@ cdef class Table(_PandasConvertible):
         cdef shared_ptr[CTable] c_table
 
         with nogil:
-            check_status(self.table.RemoveColumn(i, &c_table))
+            c_table = GetResultValue(self.table.RemoveColumn(i))
 
         return pyarrow_wrap_table(c_table)
 
@@ -1764,9 +1929,8 @@ cdef class Table(_PandasConvertible):
             c_field = field(field_, c_arr.type)
 
         with nogil:
-            check_status(self.table.SetColumn(i, c_field.sp_field,
-                                              c_arr.sp_chunked_array,
-                                              &c_table))
+            c_table = GetResultValue(self.table.SetColumn(
+                i, c_field.sp_field, c_arr.sp_chunked_array))
 
         return pyarrow_wrap_table(c_table)
 
@@ -1790,7 +1954,7 @@ cdef class Table(_PandasConvertible):
             c_names.push_back(tobytes(name))
 
         with nogil:
-            check_status(self.table.RenameColumns(c_names, &c_table))
+            c_table = GetResultValue(self.table.RenameColumns(move(c_names)))
 
         return pyarrow_wrap_table(c_table)
 

@@ -41,11 +41,16 @@ on:
       - 'java/**'
       - 'format/**'
 
+env:
+  DOCKER_BUILDKIT: 0
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
 jobs:
 
   conda-integration:
     name: AMD64 Conda Integration Test
     runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
     env:
       MAVEN: 3.5
     steps:

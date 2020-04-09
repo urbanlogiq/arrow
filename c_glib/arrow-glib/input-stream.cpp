@@ -387,7 +387,7 @@ garrow_seekable_input_stream_read_at(GArrowSeekableInputStream *input_stream,
  * Returns: (transfer full) (nullable): #GBytes that has read data on
  *   success, %NULL if there was an error.
  *
- * Since: 1.0.0
+ * Since: 0.15.0
  */
 GBytes *
 garrow_seekable_input_stream_read_at_bytes(GArrowSeekableInputStream *input_stream,
@@ -698,9 +698,7 @@ namespace garrow {
 
     arrow::Result<std::shared_ptr<arrow::Buffer>>
     Read(int64_t n_bytes) override {
-      arrow::MemoryPool *pool = arrow::default_memory_pool();
-      std::shared_ptr<arrow::ResizableBuffer> buffer;
-      RETURN_NOT_OK(AllocateResizableBuffer(pool, n_bytes, &buffer));
+      ARROW_ASSIGN_OR_RAISE(auto buffer, arrow::AllocateResizableBuffer(n_bytes));
 
       std::lock_guard<std::mutex> guard(lock_);
       GError *error = NULL;
@@ -717,7 +715,7 @@ namespace garrow {
         if (n_read_bytes < n_bytes) {
           RETURN_NOT_OK(buffer->Resize(n_read_bytes));
         }
-        return buffer;
+        return std::move(buffer);
       }
     }
 

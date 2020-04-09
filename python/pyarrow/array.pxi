@@ -381,6 +381,10 @@ cdef wrap_datum(const CDatum& datum):
         return pyarrow_wrap_array(MakeArray(datum.array()))
     elif datum.kind() == DatumType_CHUNKED_ARRAY:
         return pyarrow_wrap_chunked_array(datum.chunked_array())
+    elif datum.kind() == DatumType_RECORD_BATCH:
+        return pyarrow_wrap_batch(datum.record_batch())
+    elif datum.kind() == DatumType_TABLE:
+        return pyarrow_wrap_table(datum.table())
     elif datum.kind() == DatumType_SCALAR:
         return pyarrow_wrap_scalar(datum.scalar())
     else:
@@ -475,6 +479,23 @@ def _restore_array(data):
     """
     cdef shared_ptr[CArrayData] ad = _reconstruct_array_data(data)
     return pyarrow_wrap_array(MakeArray(ad))
+
+
+cdef CFilterOptions _convert_filter_option(object null_selection_behavior):
+    cdef CFilterOptions options
+
+    if null_selection_behavior == 'drop':
+        options.null_selection_behavior = \
+            CFilterNullSelectionBehavior_DROP
+    elif null_selection_behavior == 'emit_null':
+        options.null_selection_behavior = \
+            CFilterNullSelectionBehavior_EMIT_NULL
+    else:
+        raise ValueError(
+            '"{}" is not a valid null_selection_behavior'.format(
+                null_selection_behavior)
+        )
+    return options
 
 
 cdef class _PandasConvertible:
@@ -694,7 +715,7 @@ cdef class Array(_PandasConvertible):
         cdef DataType type = ensure_type(target_type)
         cdef shared_ptr[CArray] result
         with nogil:
-            check_status(self.ap.View(type.sp_type, &result))
+            result = GetResultValue(self.ap.View(type.sp_type))
         return pyarrow_wrap_array(result)
 
     def sum(self):
@@ -876,7 +897,7 @@ cdef class Array(_PandasConvertible):
         type_format = object.__repr__(self)
         return '{0}\n{1}'.format(type_format, str(self))
 
-    def format(self, int indent=0, int window=10):
+    def to_string(self, int indent=0, int window=10):
         cdef:
             c_string result
 
@@ -891,8 +912,13 @@ cdef class Array(_PandasConvertible):
 
         return frombytes(result)
 
+    def format(self, **kwargs):
+        import warnings
+        warnings.warn('Array.format is deprecated, use Array.to_string')
+        return self.to_string(**kwargs)
+
     def __str__(self):
-        return self.format()
+        return self.to_string()
 
     def equals(Array self, Array other):
         return self.ap.Equals(deref(other.ap))
@@ -997,7 +1023,7 @@ cdef class Array(_PandasConvertible):
 
         return wrap_datum(out)
 
-    def filter(self, Array mask):
+    def filter(self, Array mask, null_selection_behavior='drop'):
         """
         Filter the array with a boolean mask.
 
@@ -1005,6 +1031,12 @@ cdef class Array(_PandasConvertible):
         ----------
         mask : Array
             The boolean mask indicating which values to extract.
+        null_selection_behavior : str, default 'drop'
+            Configure the behavior on encountering a null slot in the mask.
+            Allowed values are 'drop' and 'emit_null'.
+
+            - 'drop': nulls will be treated as equivalent to False.
+            - 'emit_null': nulls will result in a null in the output.
 
         Returns
         -------
@@ -1020,16 +1052,25 @@ cdef class Array(_PandasConvertible):
         <pyarrow.lib.StringArray object at 0x7fa826df9200>
         [
           "a",
+          "e"
+        ]
+        >>> arr.filter(mask, null_selection_behavior='emit_null')
+        <pyarrow.lib.StringArray object at 0x7fa826df9200>
+        [
+          "a",
           null,
           "e"
         ]
         """
         cdef:
-            cdef CDatum out
+            CDatum out
+            CFilterOptions options
+
+        options = _convert_filter_option(null_selection_behavior)
 
         with nogil:
             check_status(FilterKernel(_context(), CDatum(self.sp_array),
-                                      CDatum(mask.sp_array), &out))
+                                      CDatum(mask.sp_array), options, &out))
 
         return wrap_datum(out)
 
@@ -1421,8 +1462,8 @@ cdef class ListArray(Array):
         _values = asarray(values)
 
         with nogil:
-            check_status(CListArray.FromArrays(_offsets.ap[0], _values.ap[0],
-                                               cpool, &out))
+            out = GetResultValue(
+                CListArray.FromArrays(_offsets.ap[0], _values.ap[0], cpool))
         cdef Array result = pyarrow_wrap_array(out)
         result.validate()
         return result
@@ -1503,9 +1544,9 @@ cdef class LargeListArray(Array):
         _values = asarray(values)
 
         with nogil:
-            check_status(CLargeListArray.FromArrays(_offsets.ap[0],
-                                                    _values.ap[0],
-                                                    cpool, &out))
+            out = GetResultValue(
+                CLargeListArray.FromArrays(_offsets.ap[0], _values.ap[0],
+                                           cpool))
         cdef Array result = pyarrow_wrap_array(out)
         result.validate()
         return result
@@ -1586,9 +1627,10 @@ cdef class MapArray(Array):
         _items = asarray(items)
 
         with nogil:
-            check_status(CMapArray.FromArrays(_offsets.sp_array,
-                                              _keys.sp_array, _items.sp_array,
-                                              cpool, &out))
+            out = GetResultValue(
+                CMapArray.FromArrays(_offsets.sp_array,
+                                     _keys.sp_array,
+                                     _items.sp_array, cpool))
         cdef Array result = pyarrow_wrap_array(out)
         result.validate()
         return result
@@ -1689,9 +1731,9 @@ cdef class UnionArray(Array):
             for x in type_codes:
                 c_type_codes.push_back(x)
         with nogil:
-            check_status(CUnionArray.MakeDense(
+            out = GetResultValue(CUnionArray.MakeDense(
                 deref(types.ap), deref(value_offsets.ap), c, c_field_names,
-                c_type_codes, &out))
+                c_type_codes))
         cdef Array result = pyarrow_wrap_array(out)
         result.validate()
         return result
@@ -1728,10 +1770,8 @@ cdef class UnionArray(Array):
             for x in type_codes:
                 c_type_codes.push_back(x)
         with nogil:
-            check_status(CUnionArray.MakeSparse(deref(types.ap), c,
-                                                c_field_names,
-                                                c_type_codes,
-                                                &out))
+            out = GetResultValue(CUnionArray.MakeSparse(
+                deref(types.ap), c, c_field_names, c_type_codes))
         cdef Array result = pyarrow_wrap_array(out)
         result.validate()
         return result
@@ -1901,10 +1941,9 @@ cdef class DictionaryArray(Array):
 
         if safe:
             with nogil:
-                check_status(
+                c_result = GetResultValue(
                     CDictionaryArray.FromArrays(c_type, _indices.sp_array,
-                                                _dictionary.sp_array,
-                                                &c_result))
+                                                _dictionary.sp_array))
         else:
             c_result.reset(new CDictionaryArray(c_type, _indices.sp_array,
                                                 _dictionary.sp_array))
@@ -1967,7 +2006,7 @@ cdef class StructArray(Array):
             CStructArray* sarr = <CStructArray*> self.ap
 
         with nogil:
-            check_status(sarr.Flatten(pool, &arrays))
+            arrays = GetResultValue(sarr.Flatten(pool))
 
         return [pyarrow_wrap_array(arr) for arr in arrays]
 
@@ -2132,6 +2171,19 @@ cdef dict _array_classes = {
     _Type_STRUCT: StructArray,
     _Type_EXTENSION: ExtensionArray,
 }
+
+
+cdef object get_array_class_from_type(
+        const shared_ptr[CDataType]& sp_data_type):
+    cdef CDataType* data_type = sp_data_type.get()
+    if data_type == NULL:
+        raise ValueError('Array data type was NULL')
+
+    if data_type.id() == _Type_EXTENSION:
+        py_ext_data_type = pyarrow_wrap_data_type(sp_data_type)
+        return py_ext_data_type.__arrow_ext_class__()
+    else:
+        return _array_classes[data_type.id()]
 
 
 cdef object get_values(object obj, bint* is_series):

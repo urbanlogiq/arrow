@@ -100,8 +100,8 @@ TEST(TestMessage, SerializeTo) {
 
   std::string body = "abcdef";
 
-  std::unique_ptr<Message> message;
-  ASSERT_OK(Message::Open(metadata, std::make_shared<Buffer>(body), &message));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Message> message,
+                       Message::Open(metadata, std::make_shared<Buffer>(body)));
 
   auto CheckWithAlignment = [&](int32_t alignment) {
     IpcWriteOptions options;
@@ -125,11 +125,11 @@ TEST(TestMessage, SerializeCustomMetadata) {
       key_value_metadata({"foo", "bar"}, {"fizz", "buzz"})};
   for (auto metadata : cases) {
     std::shared_ptr<Buffer> serialized;
-    std::unique_ptr<Message> message;
     ASSERT_OK(internal::WriteRecordBatchMessage(/*length=*/0, /*body_length=*/0, metadata,
                                                 /*nodes=*/{},
                                                 /*buffers=*/{}, &serialized));
-    ASSERT_OK(Message::Open(serialized, /*body=*/nullptr, &message));
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<Message> message,
+                         Message::Open(serialized, /*body=*/nullptr));
 
     if (metadata) {
       ASSERT_TRUE(message->custom_metadata()->Equals(*metadata));
@@ -163,7 +163,7 @@ TEST(TestMessage, LegacyIpcBackwardsCompatibility) {
 
     ASSERT_OK_AND_ASSIGN(*out_serialized, stream->Finish());
     io::BufferReader io_reader(*out_serialized);
-    ASSERT_OK(ReadMessage(&io_reader, out));
+    ASSERT_OK(ReadMessage(&io_reader).Value(out));
   };
 
   std::shared_ptr<Buffer> serialized, legacy_serialized;
@@ -199,9 +199,9 @@ class TestSchemaMetadata : public ::testing::Test {
   void SetUp() {}
 
   void CheckRoundtrip(const Schema& schema) {
-    std::shared_ptr<Buffer> buffer;
     DictionaryMemo in_memo, out_memo;
-    ASSERT_OK(SerializeSchema(schema, &out_memo, default_memory_pool(), &buffer));
+    ASSERT_OK_AND_ASSIGN(std::shared_ptr<Buffer> buffer,
+                         SerializeSchema(schema, &out_memo, default_memory_pool()));
 
     io::BufferReader reader(buffer);
     ASSERT_OK_AND_ASSIGN(auto actual_schema, ReadSchema(&reader, &in_memo));
@@ -285,9 +285,8 @@ class IpcTestFixture : public io::MemoryMapFixture {
 
   void DoSchemaRoundTrip(const Schema& schema, DictionaryMemo* out_memo,
                          std::shared_ptr<Schema>* result) {
-    std::shared_ptr<Buffer> serialized_schema;
-    ASSERT_OK(
-        SerializeSchema(schema, out_memo, options_.memory_pool, &serialized_schema));
+    ASSERT_OK_AND_ASSIGN(std::shared_ptr<Buffer> serialized_schema,
+                         SerializeSchema(schema, out_memo, options_.memory_pool));
 
     DictionaryMemo in_memo;
     io::BufferReader buf_reader(serialized_schema);
@@ -299,8 +298,8 @@ class IpcTestFixture : public io::MemoryMapFixture {
       const RecordBatch& batch, const IpcWriteOptions& options,
       DictionaryMemo* dictionary_memo,
       const IpcReadOptions& read_options = IpcReadOptions::Defaults()) {
-    std::shared_ptr<Buffer> serialized_batch;
-    RETURN_NOT_OK(SerializeRecordBatch(batch, options, &serialized_batch));
+    ARROW_ASSIGN_OR_RAISE(std::shared_ptr<Buffer> serialized_batch,
+                          SerializeRecordBatch(batch, options));
 
     io::BufferReader buf_reader(serialized_batch);
     return ReadRecordBatch(batch.schema(), dictionary_memo, read_options, &buf_reader);
@@ -326,9 +325,7 @@ class IpcTestFixture : public io::MemoryMapFixture {
     std::shared_ptr<RecordBatchFileReader> file_reader;
     ARROW_ASSIGN_OR_RAISE(file_reader, RecordBatchFileReader::Open(mmap_.get(), offset));
 
-    std::shared_ptr<RecordBatch> result;
-    RETURN_NOT_OK(file_reader->ReadRecordBatch(0, &result));
-    return result;
+    return file_reader->ReadRecordBatch(0);
   }
 
   void CheckReadResult(const RecordBatch& result, const RecordBatch& expected) {
@@ -417,8 +414,8 @@ TEST_F(TestIpcRoundTrip, MetadataVersion) {
   ASSERT_OK(WriteRecordBatch(*batch, buffer_offset, mmap_.get(), &metadata_length,
                              &body_length, options_));
 
-  std::unique_ptr<Message> message;
-  ASSERT_OK(ReadMessage(0, metadata_length, mmap_.get(), &message));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Message> message,
+                       ReadMessage(0, metadata_length, mmap_.get()));
 
   ASSERT_EQ(MetadataVersion::V4, message->metadata_version());
 }
@@ -426,12 +423,11 @@ TEST_F(TestIpcRoundTrip, MetadataVersion) {
 TEST(TestReadMessage, CorruptedSmallInput) {
   std::string data = "abc";
   io::BufferReader reader(data);
-  std::unique_ptr<Message> message;
-  ASSERT_RAISES(Invalid, ReadMessage(&reader, &message));
+  ASSERT_RAISES(Invalid, ReadMessage(&reader));
 
   // But no error on unsignaled EOS
   io::BufferReader reader2("");
-  ASSERT_OK(ReadMessage(&reader2, &message));
+  ASSERT_OK_AND_ASSIGN(auto message, ReadMessage(&reader2));
   ASSERT_EQ(nullptr, message);
 }
 
@@ -462,12 +458,12 @@ TEST_P(TestIpcRoundTrip, ZeroLengthArrays) {
   CheckRoundtrip(*zero_length_batch);
 
   // ARROW-544: check binary array
-  std::shared_ptr<Buffer> value_offsets;
-  ASSERT_OK(AllocateBuffer(options_.memory_pool, sizeof(int32_t), &value_offsets));
+  ASSERT_OK_AND_ASSIGN(auto value_offsets,
+                       AllocateBuffer(sizeof(int32_t), options_.memory_pool));
   *reinterpret_cast<int32_t*>(value_offsets->mutable_data()) = 0;
 
   std::shared_ptr<Array> bin_array = std::make_shared<BinaryArray>(
-      0, value_offsets, std::make_shared<Buffer>(nullptr, 0),
+      0, std::move(value_offsets), std::make_shared<Buffer>(nullptr, 0),
       std::make_shared<Buffer>(nullptr, 0));
 
   // null value_offsets
@@ -493,8 +489,8 @@ TEST_F(TestWriteRecordBatch, WriteWithCompression) {
 
   auto dict_type = dictionary(int32(), utf8());
   auto dict_field = field("f1", dict_type);
-  std::shared_ptr<Array> dict_array;
-  ASSERT_OK(DictionaryArray::FromArrays(dict_type, indices, dict, &dict_array));
+  ASSERT_OK_AND_ASSIGN(auto dict_array,
+                       DictionaryArray::FromArrays(dict_type, indices, dict));
 
   auto schema = ::arrow::schema({field("f0", utf8()), dict_field});
   auto batch =
@@ -525,8 +521,7 @@ TEST_F(TestWriteRecordBatch, WriteWithCompression) {
     }
     IpcWriteOptions options = IpcWriteOptions::Defaults();
     options.compression = codec;
-    std::shared_ptr<Buffer> buf;
-    ASSERT_RAISES(Invalid, SerializeRecordBatch(*batch, options, &buf));
+    ASSERT_RAISES(Invalid, SerializeRecordBatch(*batch, options));
   }
 }
 
@@ -741,8 +736,8 @@ TEST_F(RecursionLimits, ReadLimit) {
   ASSERT_OK(WriteToMmap(recursion_depth, true, &metadata_length, &body_length, &batch,
                         &schema));
 
-  std::unique_ptr<Message> message;
-  ASSERT_OK(ReadMessage(0, metadata_length, mmap_.get(), &message));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Message> message,
+                       ReadMessage(0, metadata_length, mmap_.get()));
 
   io::BufferReader reader(message->body());
 
@@ -762,8 +757,8 @@ TEST_F(RecursionLimits, StressLimit) {
     ASSERT_OK(WriteToMmap(recursion_depth, true, &metadata_length, &body_length, &batch,
                           &schema));
 
-    std::unique_ptr<Message> message;
-    ASSERT_OK(ReadMessage(0, metadata_length, mmap_.get(), &message));
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<Message> message,
+                         ReadMessage(0, metadata_length, mmap_.get()));
 
     DictionaryMemo empty_memo;
 
@@ -789,12 +784,13 @@ TEST_F(RecursionLimits, StressLimit) {
 #endif  // !defined(_WIN32) || defined(NDEBUG)
 
 struct FileWriterHelper {
-  Status Init(const std::shared_ptr<Schema>& schema, const IpcWriteOptions& options) {
+  Status Init(const std::shared_ptr<Schema>& schema, const IpcWriteOptions& options,
+              const std::shared_ptr<const KeyValueMetadata>& metadata = nullptr) {
     num_batches_written_ = 0;
 
-    RETURN_NOT_OK(AllocateResizableBuffer(0, &buffer_));
+    ARROW_ASSIGN_OR_RAISE(buffer_, AllocateResizableBuffer(0));
     sink_.reset(new io::BufferOutputStream(buffer_));
-    ARROW_ASSIGN_OR_RAISE(writer_, NewFileWriter(sink_.get(), schema, options));
+    ARROW_ASSIGN_OR_RAISE(writer_, NewFileWriter(sink_.get(), schema, options, metadata));
     return Status::OK();
   }
 
@@ -819,8 +815,8 @@ struct FileWriterHelper {
 
     EXPECT_EQ(num_batches_written_, reader->num_record_batches());
     for (int i = 0; i < num_batches_written_; ++i) {
-      std::shared_ptr<RecordBatch> chunk;
-      RETURN_NOT_OK(reader->ReadRecordBatch(i, &chunk));
+      ARROW_ASSIGN_OR_RAISE(std::shared_ptr<RecordBatch> chunk,
+                            reader->ReadRecordBatch(i));
       out_batches->push_back(chunk);
     }
 
@@ -836,6 +832,13 @@ struct FileWriterHelper {
     return Status::OK();
   }
 
+  Result<std::shared_ptr<const KeyValueMetadata>> ReadFooterMetadata() {
+    auto buf_reader = std::make_shared<io::BufferReader>(buffer_);
+    ARROW_ASSIGN_OR_RAISE(auto reader,
+                          RecordBatchFileReader::Open(buf_reader.get(), footer_offset_));
+    return reader->metadata();
+  }
+
   std::shared_ptr<ResizableBuffer> buffer_;
   std::unique_ptr<io::BufferOutputStream> sink_;
   std::shared_ptr<RecordBatchWriter> writer_;
@@ -845,7 +848,7 @@ struct FileWriterHelper {
 
 struct StreamWriterHelper {
   Status Init(const std::shared_ptr<Schema>& schema, const IpcWriteOptions& options) {
-    RETURN_NOT_OK(AllocateResizableBuffer(0, &buffer_));
+    ARROW_ASSIGN_OR_RAISE(buffer_, AllocateResizableBuffer(0));
     sink_.reset(new io::BufferOutputStream(buffer_));
     ARROW_ASSIGN_OR_RAISE(writer_, NewStreamWriter(sink_.get(), schema, options));
     return Status::OK();
@@ -1090,6 +1093,23 @@ INSTANTIATE_TEST_SUITE_P(GenericIpcRoundTripTests, TestIpcRoundTrip, BATCH_CASES
 INSTANTIATE_TEST_SUITE_P(FileRoundTripTests, TestFileFormat, BATCH_CASES());
 INSTANTIATE_TEST_SUITE_P(StreamRoundTripTests, TestStreamFormat, BATCH_CASES());
 
+TEST(TestIpcFileFormat, FooterMetaData) {
+  // ARROW-6837
+  std::shared_ptr<RecordBatch> batch;
+  ASSERT_OK(MakeIntRecordBatch(&batch));
+
+  auto metadata = key_value_metadata({"ARROW:example", "ARROW:example2"},
+                                     {"something something", "something something2"});
+
+  FileWriterHelper helper;
+  ASSERT_OK(helper.Init(batch->schema(), IpcWriteOptions::Defaults(), metadata));
+  ASSERT_OK(helper.WriteBatch(batch));
+  ASSERT_OK(helper.Finish());
+
+  ASSERT_OK_AND_ASSIGN(auto out_metadata, helper.ReadFooterMetadata());
+  ASSERT_TRUE(out_metadata->Equals(*metadata));
+}
+
 // This test uses uninitialized memory
 
 #if !(defined(ARROW_VALGRIND) || defined(ADDRESS_SANITIZER))
@@ -1173,7 +1193,7 @@ void SpliceMessages(std::shared_ptr<Buffer> stream,
   // Parse and reassemble first two messages in stream
   int message_index = 0;
   while (true) {
-    ASSERT_OK(message_reader->ReadNextMessage(&msg));
+    ASSERT_OK_AND_ASSIGN(msg, message_reader->ReadNextMessage());
     if (!msg) {
       break;
     }

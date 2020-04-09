@@ -223,6 +223,11 @@ endif()
 
 if(ARROW_HIVESERVER2 OR ARROW_PARQUET)
   set(ARROW_WITH_THRIFT ON)
+  if(ARROW_HIVESERVER2)
+    set(ARROW_THRIFT_REQUIRED_COMPONENTS COMPILER)
+  else()
+    set(ARROW_THRIFT_REQUIRED_COMPONENTS)
+  endif()
 else()
   set(ARROW_WITH_THRIFT OFF)
 endif()
@@ -499,6 +504,8 @@ if(NOT ARROW_VERBOSE_THIRDPARTY_BUILD)
       LOG_INSTALL
       1
       LOG_DOWNLOAD
+      1
+      LOG_OUTPUT_ON_FAILURE
       1)
   set(Boost_DEBUG FALSE)
 else()
@@ -657,7 +664,7 @@ set(Boost_ADDITIONAL_VERSIONS
 # Thrift needs Boost if we're building the bundled version,
 # so we first need to determine whether we're building it
 if(ARROW_WITH_THRIFT AND Thrift_SOURCE STREQUAL "AUTO")
-  find_package(Thrift 0.11.0 MODULE)
+  find_package(Thrift 0.11.0 MODULE COMPONENTS ${ARROW_THRIFT_REQUIRED_COMPONENTS})
   if(NOT Thrift_FOUND AND NOT THRIFT_FOUND)
     set(Thrift_SOURCE "BUNDLED")
   endif()
@@ -1397,7 +1404,7 @@ macro(build_gtest)
     set(GTEST_CMAKE_CXX_FLAGS "${GTEST_CMAKE_CXX_FLAGS} -DGTEST_CREATE_SHARED_LIBRARY=1")
   endif()
 
-  set(GTEST_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/googletest_ep-prefix/src/googletest_ep")
+  set(GTEST_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/googletest_ep-prefix")
   set(GTEST_INCLUDE_DIR "${GTEST_PREFIX}/include")
 
   set(_GTEST_RUNTIME_DIR ${BUILD_OUTPUT_ROOT_DIRECTORY})

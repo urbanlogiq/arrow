@@ -300,28 +300,28 @@ Table__TakeChunked <- function(table, indices){
     .Call(`_arrow_Table__TakeChunked` , table, indices)
 }
 
-Array__Filter <- function(values, filter){
-    .Call(`_arrow_Array__Filter` , values, filter)
+Array__Filter <- function(values, filter, keep_na){
+    .Call(`_arrow_Array__Filter` , values, filter, keep_na)
 }
 
-RecordBatch__Filter <- function(batch, filter){
-    .Call(`_arrow_RecordBatch__Filter` , batch, filter)
+RecordBatch__Filter <- function(batch, filter, keep_na){
+    .Call(`_arrow_RecordBatch__Filter` , batch, filter, keep_na)
 }
 
-ChunkedArray__Filter <- function(values, filter){
-    .Call(`_arrow_ChunkedArray__Filter` , values, filter)
+ChunkedArray__Filter <- function(values, filter, keep_na){
+    .Call(`_arrow_ChunkedArray__Filter` , values, filter, keep_na)
 }
 
-ChunkedArray__FilterChunked <- function(values, filter){
-    .Call(`_arrow_ChunkedArray__FilterChunked` , values, filter)
+ChunkedArray__FilterChunked <- function(values, filter, keep_na){
+    .Call(`_arrow_ChunkedArray__FilterChunked` , values, filter, keep_na)
 }
 
-Table__Filter <- function(table, filter){
-    .Call(`_arrow_Table__Filter` , table, filter)
+Table__Filter <- function(table, filter, keep_na){
+    .Call(`_arrow_Table__Filter` , table, filter, keep_na)
 }
 
-Table__FilterChunked <- function(table, filter){
-    .Call(`_arrow_Table__FilterChunked` , table, filter)
+Table__FilterChunked <- function(table, filter, keep_na){
+    .Call(`_arrow_Table__FilterChunked` , table, filter, keep_na)
 }
 
 csv___ReadOptions__initialize <- function(options){
@@ -956,18 +956,6 @@ io___BufferOutputStream__Write <- function(stream, bytes){
     invisible(.Call(`_arrow_io___BufferOutputStream__Write` , stream, bytes))
 }
 
-io___MockOutputStream__initialize <- function(){
-    .Call(`_arrow_io___MockOutputStream__initialize` )
-}
-
-io___MockOutputStream__GetExtentBytesWritten <- function(stream){
-    .Call(`_arrow_io___MockOutputStream__GetExtentBytesWritten` , stream)
-}
-
-io___FixedSizeBufferWriter__initialize <- function(buffer){
-    .Call(`_arrow_io___FixedSizeBufferWriter__initialize` , buffer)
-}
-
 json___ReadOptions__initialize <- function(options){
     .Call(`_arrow_json___ReadOptions__initialize` , options)
 }
@@ -1256,8 +1244,8 @@ RecordBatch__from_dataframe <- function(tbl){
     .Call(`_arrow_RecordBatch__from_dataframe` , tbl)
 }
 
-RecordBatch__Equals <- function(self, other){
-    .Call(`_arrow_RecordBatch__Equals` , self, other)
+RecordBatch__Equals <- function(self, other, check_metadata){
+    .Call(`_arrow_RecordBatch__Equals` , self, other, check_metadata)
 }
 
 RecordBatch__RemoveColumn <- function(batch, i){

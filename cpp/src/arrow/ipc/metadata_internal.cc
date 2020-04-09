@@ -249,7 +249,7 @@ Status ConcreteTypeFromFlatbuffer(flatbuf::Type type, const void* type_data,
       return Status::OK();
     case flatbuf::Type::Decimal: {
       auto dec_type = static_cast<const flatbuf::Decimal*>(type_data);
-      return Decimal128Type::Make(dec_type->precision(), dec_type->scale(), out);
+      return Decimal128Type::Make(dec_type->precision(), dec_type->scale()).Value(out);
     }
     case flatbuf::Type::Date: {
       auto date_type = static_cast<const flatbuf::Date*>(type_data);
@@ -383,7 +383,7 @@ static Status TypeFromFlatbuffer(const flatbuf::Field* field,
       // return the raw data
       return Status::OK();
     }
-    RETURN_NOT_OK(type->Deserialize(*out, type_data, out));
+    ARROW_ASSIGN_OR_RAISE(*out, type->Deserialize(*out, type_data));
   }
   return Status::OK();
 }
@@ -959,14 +959,14 @@ Status MakeSparseTensorIndexCSF(FBB& fbb, const SparseCSFIndex& sparse_index,
   int64_t offset = 0;
   std::vector<flatbuf::Buffer> indptr, indices;
 
-  for (const std::shared_ptr<arrow::Tensor> tensor : sparse_index.indptr()) {
+  for (const std::shared_ptr<arrow::Tensor>& tensor : sparse_index.indptr()) {
     const int64_t size = tensor->data()->size() / indptr_elem_size;
     const int64_t padded_size = PaddedLength(tensor->data()->size(), kArrowIpcAlignment);
 
     indptr.push_back({offset, size});
     offset += padded_size;
   }
-  for (const std::shared_ptr<arrow::Tensor> tensor : sparse_index.indices()) {
+  for (const std::shared_ptr<arrow::Tensor>& tensor : sparse_index.indices()) {
     const int64_t size = tensor->data()->size() / indices_elem_size;
     const int64_t padded_size = PaddedLength(tensor->data()->size(), kArrowIpcAlignment);
 
@@ -1184,6 +1184,7 @@ FileBlocksToFlatbuffer(FBB& fbb, const std::vector<FileBlock>& blocks) {
 
 Status WriteFileFooter(const Schema& schema, const std::vector<FileBlock>& dictionaries,
                        const std::vector<FileBlock>& record_batches,
+                       const std::shared_ptr<const KeyValueMetadata>& metadata,
                        io::OutputStream* out) {
   FBB fbb;
 
@@ -1208,8 +1209,11 @@ Status WriteFileFooter(const Schema& schema, const std::vector<FileBlock>& dicti
   auto fb_dictionaries = FileBlocksToFlatbuffer(fbb, dictionaries);
   auto fb_record_batches = FileBlocksToFlatbuffer(fbb, record_batches);
 
-  auto footer = flatbuf::CreateFooter(fbb, kCurrentMetadataVersion, fb_schema,
-                                      fb_dictionaries, fb_record_batches);
+  auto fb_custom_metadata = SerializeCustomMetadata(fbb, metadata);
+
+  auto footer =
+      flatbuf::CreateFooter(fbb, kCurrentMetadataVersion, fb_schema, fb_dictionaries,
+                            fb_record_batches, fb_custom_metadata);
   fbb.Finish(footer);
 
   int32_t size = fbb.GetSize();

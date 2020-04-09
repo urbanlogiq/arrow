@@ -18,6 +18,13 @@
 # Wrap testthat::test_that with a check for the C++ library
 options(..skip.tests = !arrow:::arrow_available())
 
+if (tolower(Sys.info()[["sysname"]]) == "windows") {
+  # See if this stabilizes tests; TODO fix the underlying issue
+  options(arrow.use_threads = FALSE)
+}
+
+set.seed(1)
+
 test_that <- function(what, code) {
   testthat::test_that(what, {
     skip_if(getOption("..skip.tests", TRUE), "arrow C++ library not available")

@@ -35,11 +35,16 @@ on:
       - 'format/Flight.proto'
       - 'java/**'
 
+env:
+  DOCKER_BUILDKIT: 0
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
 jobs:
 
   debian:
     name: AMD64 Debian 9 Java JDK ${{ matrix.jdk }} Maven ${{ matrix.maven }}
     runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
     strategy:
       fail-fast: false
       matrix:

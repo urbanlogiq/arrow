@@ -547,10 +547,9 @@ garrow_array_view(GArrowArray *array,
 {
   auto arrow_array_raw = garrow_array_get_raw(array);
   auto arrow_return_type = garrow_data_type_get_raw(return_type);
-  std::shared_ptr<arrow::Array> arrow_array;
-  auto status = arrow_array_raw->View(arrow_return_type, &arrow_array);
-  if (garrow_error_check(error, status, "[array][view]")) {
-    return garrow_array_new_raw(&arrow_array);
+  auto arrow_array = arrow_array_raw->View(arrow_return_type);
+  if (garrow::check(error, arrow_array, "[array][view]")) {
+    return garrow_array_new_raw(&(*arrow_array));
   } else {
     return NULL;
   }
@@ -1610,7 +1609,7 @@ garrow_large_binary_array_class_init(GArrowLargeBinaryArrayClass *klass)
  *
  * Returns: A newly created #GArrowLargeBinaryArray.
  *
- * Since: 1.0.0
+ * Since: 0.16.0
  */
 GArrowLargeBinaryArray *
 garrow_large_binary_array_new(gint64 length,
@@ -1640,7 +1639,7 @@ garrow_large_binary_array_new(gint64 length,
  *
  * Returns: (transfer full): The @i-th value.
  *
- * Since: 1.0.0
+ * Since: 0.16.0
  */
 GBytes *
 garrow_large_binary_array_get_value(GArrowLargeBinaryArray *array,
@@ -1661,7 +1660,7 @@ garrow_large_binary_array_get_value(GArrowLargeBinaryArray *array,
  *
  * Returns: (transfer full): The data of the array as #GArrowBuffer.
  *
- * Since: 1.0.0
+ * Since: 0.16.0
  */
 GArrowBuffer *
 garrow_large_binary_array_get_buffer(GArrowLargeBinaryArray *array)
@@ -1679,7 +1678,7 @@ garrow_large_binary_array_get_buffer(GArrowLargeBinaryArray *array)
  *
  * Returns: (transfer full): The offsets of the array as #GArrowBuffer.
  *
- * Since: 1.0.0
+ * Since: 0.16.0
  */
 GArrowBuffer *
 garrow_large_binary_array_get_offsets_buffer(GArrowLargeBinaryArray *array)
@@ -1792,7 +1791,7 @@ garrow_large_string_array_class_init(GArrowLargeStringArrayClass *klass)
  *
  * Returns: A newly created #GArrowLargeStringArray.
  *
- * Since: 1.0.0
+ * Since: 0.16.0
  */
 GArrowLargeStringArray *
 garrow_large_string_array_new(gint64 length,
@@ -1822,7 +1821,7 @@ garrow_large_string_array_new(gint64 length,
  *
  * Returns: The @i-th UTF-8 encoded string.
  *
- * Since: 1.0.0
+ * Since: 0.16.0
  */
 gchar *
 garrow_large_string_array_get_string(GArrowLargeStringArray *array,

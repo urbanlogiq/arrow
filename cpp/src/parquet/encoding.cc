@@ -101,9 +101,8 @@ class PlainEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
 
   void PutSpaced(const T* src, int num_values, const uint8_t* valid_bits,
                  int64_t valid_bits_offset) override {
-    std::shared_ptr<ResizableBuffer> buffer;
-    PARQUET_THROW_NOT_OK(arrow::AllocateResizableBuffer(this->memory_pool(),
-                                                        num_values * sizeof(T), &buffer));
+    PARQUET_ASSIGN_OR_THROW(
+        auto buffer, arrow::AllocateBuffer(num_values * sizeof(T), this->memory_pool()));
     int32_t num_valid_values = 0;
     arrow::internal::BitmapReader valid_bits_reader(valid_bits, valid_bits_offset,
                                                     num_values);
@@ -302,9 +301,8 @@ class PlainEncoder<BooleanType> : public EncoderImpl, virtual public BooleanEnco
 
   void PutSpaced(const bool* src, int num_values, const uint8_t* valid_bits,
                  int64_t valid_bits_offset) override {
-    std::shared_ptr<ResizableBuffer> buffer;
-    PARQUET_THROW_NOT_OK(arrow::AllocateResizableBuffer(this->memory_pool(),
-                                                        num_values * sizeof(T), &buffer));
+    PARQUET_ASSIGN_OR_THROW(
+        auto buffer, arrow::AllocateBuffer(num_values * sizeof(T), this->memory_pool()));
     int32_t num_valid_values = 0;
     arrow::internal::BitmapReader valid_bits_reader(valid_bits, valid_bits_offset,
                                                     num_values);
@@ -863,7 +861,7 @@ std::shared_ptr<Buffer> ByteStreamSplitEncoder<DType>::FlushValues() {
   uint8_t* output_buffer_raw = output_buffer->mutable_data();
   const size_t num_values = values_.length();
   const uint8_t* raw_values = reinterpret_cast<const uint8_t*>(values_.data());
-#if defined(ARROW_HAVE_SSE2)
+#if defined(ARROW_HAVE_SSE4_2)
   arrow::util::internal::ByteStreamSplitEncodeSSE2<T>(raw_values, num_values,
                                                       output_buffer_raw);
 #else
@@ -900,9 +898,8 @@ template <typename DType>
 void ByteStreamSplitEncoder<DType>::PutSpaced(const T* src, int num_values,
                                               const uint8_t* valid_bits,
                                               int64_t valid_bits_offset) {
-  std::shared_ptr<ResizableBuffer> buffer;
-  PARQUET_THROW_NOT_OK(arrow::AllocateResizableBuffer(this->memory_pool(),
-                                                      num_values * sizeof(T), &buffer));
+  PARQUET_ASSIGN_OR_THROW(
+      auto buffer, arrow::AllocateBuffer(num_values * sizeof(T), this->memory_pool()));
   int32_t num_valid_values = 0;
   arrow::internal::BitmapReader valid_bits_reader(valid_bits, valid_bits_offset,
                                                   num_values);
@@ -1045,15 +1042,15 @@ int PlainDecoder<DType>::DecodeArrow(
 template <typename T>
 inline int DecodePlain(const uint8_t* data, int64_t data_size, int num_values,
                        int type_length, T* out) {
-  int bytes_to_decode = num_values * static_cast<int>(sizeof(T));
-  if (data_size < bytes_to_decode) {
+  int64_t bytes_to_decode = num_values * static_cast<int64_t>(sizeof(T));
+  if (bytes_to_decode > data_size || bytes_to_decode > INT_MAX) {
     ParquetException::EofException();
   }
   // If bytes_to_decode == 0, data could be null
   if (bytes_to_decode > 0) {
     memcpy(out, data, bytes_to_decode);
   }
-  return bytes_to_decode;
+  return static_cast<int>(bytes_to_decode);
 }
 
 template <typename DType>
@@ -1108,8 +1105,8 @@ template <>
 inline int DecodePlain<FixedLenByteArray>(const uint8_t* data, int64_t data_size,
                                           int num_values, int type_length,
                                           FixedLenByteArray* out) {
-  int bytes_to_decode = type_length * num_values;
-  if (data_size < bytes_to_decode) {
+  int64_t bytes_to_decode = static_cast<int64_t>(type_length) * num_values;
+  if (bytes_to_decode > data_size || bytes_to_decode > INT_MAX) {
     ParquetException::EofException();
   }
   for (int i = 0; i < num_values; ++i) {
@@ -1117,7 +1114,7 @@ inline int DecodePlain<FixedLenByteArray>(const uint8_t* data, int64_t data_size
     data += type_length;
     data_size -= type_length;
   }
-  return bytes_to_decode;
+  return static_cast<int>(bytes_to_decode);
 }
 
 template <typename DType>
@@ -2315,7 +2312,7 @@ class ByteStreamSplitDecoder : public DecoderImpl, virtual public TypedDecoder<D
   T* EnsureDecodeBuffer(int64_t min_values) {
     const int64_t size = sizeof(T) * min_values;
     if (!decode_buffer_ || decode_buffer_->size() < size) {
-      PARQUET_THROW_NOT_OK(AllocateBuffer(size, &decode_buffer_));
+      PARQUET_ASSIGN_OR_THROW(decode_buffer_, ::arrow::AllocateBuffer(size));
     }
     return reinterpret_cast<T*>(decode_buffer_->mutable_data());
   }
@@ -2347,7 +2344,7 @@ int ByteStreamSplitDecoder<DType>::Decode(T* buffer, int max_values) {
   const int num_decoded_previously = num_values_in_buffer_ - num_values_;
   const uint8_t* data = data_ + num_decoded_previously;
 
-#if defined(ARROW_HAVE_SSE2)
+#if defined(ARROW_HAVE_SSE4_2)
   arrow::util::internal::ByteStreamSplitDecodeSSE2<T>(data, values_to_decode,
                                                       num_values_in_buffer_, buffer);
 #else
@@ -2375,7 +2372,7 @@ int ByteStreamSplitDecoder<DType>::DecodeArrow(
   const uint8_t* data = data_ + num_decoded_previously;
   int offset = 0;
 
-#if defined(ARROW_HAVE_SSE2)
+#if defined(ARROW_HAVE_SSE4_2)
   // Use fast decoding into intermediate buffer.  This will also decode
   // some null values, but it's fast enough that we don't care.
   T* decode_out = EnsureDecodeBuffer(values_decoded);
