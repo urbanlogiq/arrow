@@ -76,7 +76,8 @@ impl<'a> TypeCoercionRule<'a> {
                             });
                         }
                         _ => {
-                            let super_type = utils::get_supertype(&left_type, &right_type)?;
+                            let super_type =
+                                utils::get_supertype(&left_type, &right_type)?;
                             return Ok(Expr::BinaryExpr {
                                 left: Arc::new(left.cast_to(&super_type, schema)?),
                                 op: op.clone(),

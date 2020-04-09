@@ -93,7 +93,7 @@ mod tests {
         let ctx = ExecutionContext::new();
         let plan = ctx.optimize(&plan)?;
         let expected = "Projection: sqrt(CAST(#0 AS Float64))\
-        \n  TableScan:  projection=Some([0])";
+                        \n  TableScan:  projection=Some([0])";
         assert_eq!(format!("{:?}", plan), expected);
         Ok(())
     }
@@ -107,7 +107,7 @@ mod tests {
         let ctx = ExecutionContext::new();
         let plan = ctx.optimize(&plan)?;
         let expected = "Projection: sqrt(#0)\
-        \n  TableScan:  projection=Some([0])";
+                        \n  TableScan:  projection=Some([0])";
         assert_eq!(format!("{:?}", plan), expected);
         Ok(())
     }
