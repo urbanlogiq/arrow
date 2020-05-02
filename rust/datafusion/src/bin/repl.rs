@@ -115,7 +115,9 @@ fn exec_and_print(
         );
         return Ok(());
     }
-
+    // println!("{:?}", results[0].column(0));
+    // println!("{:?}", results[0].column(1));
+    // panic!();
     utils::print_batches(&results)?;
 
     let row_count: usize = results.iter().map(|b| b.num_rows()).sum();

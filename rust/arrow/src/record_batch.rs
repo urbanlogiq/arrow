@@ -51,6 +51,8 @@ impl RecordBatch {
         }
         println!("schema.fields().len(): {:?}", schema.fields().len());
         println!("columns.len(): {:?}", columns.len());
+        println!("schema.fields(): {:?}", schema.fields());
+        println!("columns: {:?}", columns);
         // check that number of fields in schema match column length
         if schema.fields().len() != columns.len() {
             return Err(ArrowError::InvalidArgumentError(

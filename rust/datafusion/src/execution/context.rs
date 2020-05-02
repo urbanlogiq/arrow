@@ -285,30 +285,44 @@ impl ExecutionContext {
                 let input = self.create_physical_plan(input, batch_size)?;
                 let input_schema = input.as_ref().schema().clone();
                 //MORGAN
+                println!("len of expr: {:?}", expr.len());
                 let mut test_expr = Vec::new();
+                let mut current_flat_idx = 0;
+                let mut real_fields = Vec::new();
                 for e in expr.iter() {
                     if let Expr::Column(i) = e {
                         let field = &input_schema.field(*i);
-                        if let DataType::Struct(fields) = field.data_type() {
-                            println!("got a struct");
-                            let indices: Vec<usize> = (*i..(i + fields.len())).collect();
+                        if let DataType::Struct(inner_fields) = field.data_type() {
+                            for inner_field in inner_fields {
+                                real_fields.push(inner_field.clone());
+                            }
+                            println!("got a struct. i: {:?}, fields len: {:?}", i, inner_fields.len());
+                            let indices: Vec<usize> = (current_flat_idx..(current_flat_idx + inner_fields.len())).collect();
                             for idx in indices.iter() {
+                                println!("idx: {:?}", idx);
                                 let new_e = Expr::Column(*idx);
                                 test_expr.push(new_e);
+                                current_flat_idx = current_flat_idx + 1;
                             }
                         } else {
+                            real_fields.push(field.clone().clone());
                             println!("got a non struct");
                             test_expr.push(e.clone());
+                            current_flat_idx = current_flat_idx + 1;
                         }
                     } else {
                         test_expr.push(e.clone());
                     }
                 }
-                println!("length of runtime_expr: {:?}", test_expr.len());
-                // let runtime_expr = test_expr
-                let runtime_expr = expr
+                println!("length of test_expr: {:?}", test_expr.len());
+                // panic!();
+                println!("real fields: {:?}", real_fields);
+                let test_schema = Schema::new(real_fields);
+                let runtime_expr = test_expr
+                // let runtime_expr = expr
                     .iter()
-                    .map(|e| self.create_physical_expr(e, &input_schema))
+                    // .map(|e| self.create_physical_expr(e, &input_schema))
+                    .map(|e| self.create_physical_expr(e, &test_schema))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Arc::new(ProjectionExec::try_new(runtime_expr, input)?))
             }
@@ -414,20 +428,25 @@ impl ExecutionContext {
                 Ok(Arc::new(Alias::new(expr, &name)))
             }
             Expr::Column(i) => {
-                let mut real_fields = Vec::new();
-                println!("input schema for create_physical_expr: {:?}", input_schema);
-                for field in input_schema.fields() {
-                    if let DataType::Struct(inner_fields) = field.data_type() {
-                        for inner_field in inner_fields.iter() {
-                            real_fields.push(inner_field.clone());
-                        }
-                    } else {
-                        real_fields.push(field.clone());
-                    }
-                }
-                let field = real_fields[*i].clone();
-                println!("\n\n\n\n\nin create_physical_expr: making new column for field name: {:?}\n\n\n\n\n", field.name());
-                Ok(Arc::new(Column::new(*i, field.name())))
+                // let mut real_fields = Vec::new();
+                // println!("i: {:?}, input schema for create_physical_expr: {:?}", i, input_schema);
+                // println!("len of input_schema.fields: {:?}", input_schema.fields().len());
+                // for field in input_schema.fields() {
+                //     if let DataType::Struct(inner_fields) = field.data_type() {
+                //         println!("len of inner fields: {:?}", inner_fields.len());
+                //         for inner_field in inner_fields.iter() {
+                //             real_fields.push(inner_field.clone());
+                //         }
+                //     } else {
+                //         println!("non struct");
+                //         real_fields.push(field.clone());
+                //     }
+                // }
+                // println!("real fields: {:?}\n", real_fields);
+                // let field = real_fields[*i].clone();
+                // println!("\n\n\n\n\nin create_physical_expr: making new column: {:?} for field name: {:?}", i, field.name());
+                // Ok(Arc::new(Column::new(*i, field.name())))
+                Ok(Arc::new(Column::new(*i, input_schema.fields()[*i].name())))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
             Expr::BinaryExpr { left, op, right } => Ok(Arc::new(BinaryExpr::new(

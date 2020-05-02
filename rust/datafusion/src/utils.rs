@@ -51,6 +51,11 @@ pub fn create_table(results: &Vec<RecordBatch>) -> Result<Table> {
     table.set_titles(Row::new(header));
 
     for batch in results {
+        println!("batch.column(0): {:?}", batch.column(0));
+        println!("batch.column(1): {:?}", batch.column(1));
+    }
+
+    for batch in results {
         for row in 0..batch.num_rows() {
             let mut cells = Vec::new();
             for col in 0..batch.num_columns() {
@@ -100,11 +105,17 @@ macro_rules! make_string_from_list {
 
 macro_rules! make_string_from_struct {
     ($column: ident, $row: ident) => {{
+        let mut string_values = Vec::new();
         let struct_array = $column
             .as_any()
             .downcast_ref::<array::StructArray>()
             .unwrap();
-        Ok(format!("{:?}", struct_array))
+        for i in 0..struct_array.num_columns() {
+            let key = struct_array.column_names()[i];
+            let val = array_value_to_string(struct_array.column(i).clone(), $row)?;
+            string_values.push(format!("{}: {}\n", key, val));
+        }
+        Ok(format!("[{}]", string_values.join(", ")))
     }};
 }
 
