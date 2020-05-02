@@ -34,6 +34,7 @@ pub fn print_batches(results: &Vec<RecordBatch>) -> Result<()> {
 
 ///! Convert a series of record batches into a table
 pub fn create_table(results: &Vec<RecordBatch>) -> Result<Table> {
+    println!("in repl create table");
     let mut table = Table::new();
     table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
 
@@ -97,6 +98,16 @@ macro_rules! make_string_from_list {
     }};
 }
 
+macro_rules! make_string_from_struct {
+    ($column: ident, $row: ident) => {{
+        let struct_array = $column
+            .as_any()
+            .downcast_ref::<array::StructArray>()
+            .unwrap();
+        Ok(format!("{:?}", struct_array))
+    }};
+}
+
 /// Get the value at the given row in an array as a string
 pub fn array_value_to_string(column: array::ArrayRef, row: usize) -> Result<String> {
     match column.data_type() {
@@ -144,6 +155,7 @@ pub fn array_value_to_string(column: array::ArrayRef, row: usize) -> Result<Stri
             make_string!(array::Time64NanosecondArray, column, row)
         }
         DataType::List(_) => make_string_from_list!(column, row),
+        DataType::Struct(_) => make_string_from_struct!(column, row),
         _ => Err(ExecutionError::ExecutionError(format!(
             "Unsupported {:?} type for repl.",
             column.data_type()

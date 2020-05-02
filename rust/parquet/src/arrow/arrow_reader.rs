@@ -106,7 +106,7 @@ impl ArrowReader for ParquetFileArrowReader {
             .file_metadata()
             .schema_descr()
             .num_columns();
-
+        println!("column_indices from get_record_reader: {:?}", column_indices);
         self.get_record_reader_by_columns(column_indices, batch_size)
     }
 
@@ -118,6 +118,7 @@ impl ArrowReader for ParquetFileArrowReader {
     where
         T: IntoIterator<Item = usize>,
     {
+        println!("get_record_reader_by_columns");
         let array_reader = build_array_reader(
             self.file_reader
                 .metadata()
@@ -153,6 +154,7 @@ impl RecordBatchReader for ParquetRecordBatchReader {
             .next_batch(self.batch_size)
             .map_err(|err| err.into())
             .and_then(|array| {
+                println!("array: {:?}", array);
                 array
                     .as_any()
                     .downcast_ref::<StructArray>()
@@ -161,13 +163,19 @@ impl RecordBatchReader for ParquetRecordBatchReader {
                             .into()
                     })
                     .and_then(|struct_array| {
-                        RecordBatch::try_new(
+                        println!("struct array: {:?}", struct_array);
+                        println!("trying from parquet record batch reader");
+                        println!("schema: {:?}", self.schema);
+                        let r = RecordBatch::try_new(
                             self.schema.clone(),
                             struct_array.columns_ref(),
-                        )
+                        );
+                        println!("after making r");
+                        r
                     })
             })
             .map(|record_batch| {
+                println!("record batch number of rows: {:?}", record_batch.num_rows());
                 if record_batch.num_rows() > 0 {
                     Some(record_batch)
                 } else {

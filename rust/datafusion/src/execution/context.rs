@@ -82,6 +82,7 @@ impl ExecutionContext {
         plan: &LogicalPlan,
         batch_size: usize,
     ) -> Result<Vec<RecordBatch>> {
+        println!("in collect plan");
         match plan {
             LogicalPlan::CreateExternalTable {
                 ref schema,
@@ -107,6 +108,7 @@ impl ExecutionContext {
             plan => {
                 let plan = self.optimize(&plan)?;
                 let plan = self.create_physical_plan(&plan, batch_size)?;
+                println!("created physical plan");
                 Ok(self.collect(plan.as_ref())?)
             }
         }
@@ -282,6 +284,28 @@ impl ExecutionContext {
             LogicalPlan::Projection { input, expr, .. } => {
                 let input = self.create_physical_plan(input, batch_size)?;
                 let input_schema = input.as_ref().schema().clone();
+                //MORGAN
+                let mut test_expr = Vec::new();
+                for e in expr.iter() {
+                    if let Expr::Column(i) = e {
+                        let field = &input_schema.field(*i);
+                        if let DataType::Struct(fields) = field.data_type() {
+                            println!("got a struct");
+                            let indices: Vec<usize> = (*i..(i + fields.len())).collect();
+                            for idx in indices.iter() {
+                                let new_e = Expr::Column(*idx);
+                                test_expr.push(new_e);
+                            }
+                        } else {
+                            println!("got a non struct");
+                            test_expr.push(e.clone());
+                        }
+                    } else {
+                        test_expr.push(e.clone());
+                    }
+                }
+                println!("length of runtime_expr: {:?}", test_expr.len());
+                // let runtime_expr = test_expr
                 let runtime_expr = expr
                     .iter()
                     .map(|e| self.create_physical_expr(e, &input_schema))
@@ -390,7 +414,20 @@ impl ExecutionContext {
                 Ok(Arc::new(Alias::new(expr, &name)))
             }
             Expr::Column(i) => {
-                Ok(Arc::new(Column::new(*i, &input_schema.field(*i).name())))
+                let mut real_fields = Vec::new();
+                println!("input schema for create_physical_expr: {:?}", input_schema);
+                for field in input_schema.fields() {
+                    if let DataType::Struct(inner_fields) = field.data_type() {
+                        for inner_field in inner_fields.iter() {
+                            real_fields.push(inner_field.clone());
+                        }
+                    } else {
+                        real_fields.push(field.clone());
+                    }
+                }
+                let field = real_fields[*i].clone();
+                println!("\n\n\n\n\nin create_physical_expr: making new column for field name: {:?}\n\n\n\n\n", field.name());
+                Ok(Arc::new(Column::new(*i, field.name())))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
             Expr::BinaryExpr { left, op, right } => Ok(Arc::new(BinaryExpr::new(

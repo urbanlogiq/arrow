@@ -105,7 +105,29 @@ impl PhysicalExpr for Column {
 
     /// Evaluate the expression
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        Ok(batch.column(self.index).clone())
+        // MORGAN
+        println!("batch columns: {:?}", batch.columns());
+        println!("batch schema: {:?}", batch.schema());
+        let mut column_idx = self.index;
+        let mut current_flat_idx = 0;
+        let mut current_outer_idx = 0;
+        for i in 0..batch.columns().len() {
+            let field = batch.schema().field(i);
+            if let DataType::Struct(inner_fields) = field.data_type() {
+                for inner_idx in i..(i + inner_fields.len()) {
+                    current_flat_idx = current_flat_idx + inner_idx;
+                    if current_flat_idx == self.index {
+                        column_idx = current_outer_idx;
+                    }
+                }
+            } else {
+                current_flat_idx = current_flat_idx + 1;
+            }
+            current_outer_idx = current_outer_idx + 1;
+        }
+        println!("PhysicalExpr about to evaluate column_idx: {:?}", column_idx);
+        Ok(batch.column(column_idx).clone())
+        // Ok(batch.column(self.index).clone())
     }
 }
 

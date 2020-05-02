@@ -39,11 +39,14 @@ fn main() -> Result<()> {
 
     // create the query plan
     let plan = ctx.create_logical_plan(&sql)?;
+    println!("created logical plan");
     let plan = ctx.optimize(&plan)?;
+    println!("created optimized plan");
     let plan = ctx.create_physical_plan(&plan, 1024 * 1024)?;
-
+    println!("created physical plan");
     // execute the query
     let results = ctx.collect(plan.as_ref())?;
+    println!("created record batches");
 
     // print the results
     utils::print_batches(&results)?;

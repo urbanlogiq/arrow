@@ -26,7 +26,7 @@ use crate::error::Result;
 use crate::execution::physical_plan::{
     BatchIterator, ExecutionPlan, Partition, PhysicalExpr,
 };
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::{Field, Schema, DataType};
 use arrow::record_batch::RecordBatch;
 
 /// Execution plan for a projection
@@ -38,7 +38,7 @@ pub struct ProjectionExec {
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
 }
-
+// MORGAN
 impl ProjectionExec {
     /// Create a projection on an input
     pub fn try_new(
@@ -47,13 +47,29 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
+        let mut real_fields = Vec::new();
+        for field in input_schema.fields() {
+            if let DataType::Struct(inner_fields) = field.data_type() {
+                for inner_field in inner_fields.iter() {
+                    real_fields.push(inner_field.clone());
+                }
+            } else {
+                real_fields.push(field.clone());
+            }
+        }
+
+        let flattened_input_schema = Schema::new(real_fields);
+        println!("input schema: {:?}", input_schema);
+        println!("flattened input schema: {:?}", flattened_input_schema);
         let fields: Result<Vec<_>> = expr
             .iter()
-            .map(|e| Ok(Field::new(&e.name(), e.data_type(&input_schema)?, true)))
+            .map(|e| {
+                Ok(Field::new(&e.name(), e.data_type(&flattened_input_schema)?, true))
+            })
             .collect();
-
+        println!("fields in ProjectionExec: {:?}", fields);
         let schema = Arc::new(Schema::new(fields?));
-
+        println!("schema in ProjectionExec: {:?}", schema);
         Ok(Self {
             expr: expr.clone(),
             schema,
@@ -81,7 +97,6 @@ impl ExecutionPlan for ProjectionExec {
                     expr,
                     input: p.clone() as Arc<dyn Partition>,
                 });
-
                 projection
             })
             .collect();
@@ -126,8 +141,40 @@ impl BatchIterator for ProjectionIterator {
         let mut input = self.input.lock().unwrap();
         match input.next()? {
             Some(batch) => {
+                //MORGAN
+                println!("in next in BatchIterator for ProjectionIterator");
                 let arrays: Result<Vec<_>> =
                     self.expr.iter().map(|expr| expr.evaluate(&batch)).collect();
+                println!("schema: {:?}", self.schema.clone());
+
+                if let Ok(result_arrays) = arrays {
+                    let mut current_outer_idx = 0;
+                    let mut real_fields = Vec::new();
+                    let batch_schema = batch.schema();
+                    println!("result_arrays: {:?}", result_arrays);
+                    println!("result_arrays[0]: {:?}", result_arrays[0]);
+                    println!("batch schema: {:?}", batch_schema);
+                    for i in 0..result_arrays.len() {
+                        match result_arrays[i].data_type() {
+                            DataType::Struct(fields) => {
+                                println!("current outer index: {:?}", current_outer_idx);
+                                let batch_field = batch_schema.field(current_outer_idx);
+                                let batch_field_name = batch_field.name();
+                                let struct_field = Field::new(batch_field_name, DataType::Struct(fields.clone()), true);
+                                real_fields.push(struct_field);
+                            },
+                            _ => {
+                                let real_field = self.schema.fields()[current_outer_idx].clone();
+                                real_fields.push(real_field);
+                            }
+                        }
+                        current_outer_idx = current_outer_idx + 1;
+                    }
+                    let schema = Arc::new(Schema::new(real_fields));
+                    println!("computed schema: {:?}", schema);
+                    // panic!();
+                    return Ok(Some(RecordBatch::try_new(schema, result_arrays)?))
+                }
                 Ok(Some(RecordBatch::try_new(self.schema.clone(), arrays?)?))
             }
             None => Ok(None),
