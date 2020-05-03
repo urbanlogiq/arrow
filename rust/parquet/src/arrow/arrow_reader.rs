@@ -153,7 +153,6 @@ impl RecordBatchReader for ParquetRecordBatchReader {
             .next_batch(self.batch_size)
             .map_err(|err| err.into())
             .and_then(|array| {
-
                 array
                     .as_any()
                     .downcast_ref::<StructArray>()
