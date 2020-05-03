@@ -955,8 +955,6 @@ impl StructArrayReader {
         def_level: i16,
         rep_level: i16,
     ) -> Self {
-        // println!("data type: {:?}", data_type);
-        // println!("children len: {:?}", children.len());
         Self {
             data_type,
             children,
@@ -1002,6 +1000,7 @@ impl ArrayReader for StructArrayReader {
             self.rep_level_buffer = None;
             return Ok(Arc::new(StructArray::from(Vec::new())));
         }
+
         let children_array = self
             .children
             .iter_mut()
@@ -1016,7 +1015,7 @@ impl ArrayReader for StructArrayReader {
                     Ok(result)
                 },
             )?;
-        // println!("children array: {:?}", children_array);
+
         // check that array child data has same size
         let children_array_len =
             children_array.first().map(|arr| arr.len()).ok_or_else(|| {
@@ -1103,7 +1102,7 @@ impl ArrayReader for StructArrayReader {
         self.def_level_buffer = Some(def_level_data_buffer.freeze());
         self.rep_level_buffer = rep_level_data;
         let result_array = StructArray::from(array_data);
-        // println!("result_array: {:?}", result_array);
+
         return Ok(Arc::new(result_array));
     }
 
@@ -1129,15 +1128,11 @@ pub fn build_array_reader<T>(
 where
     T: IntoIterator<Item = usize>,
 {
-    // println!("parquet_schema columns: {:?}", parquet_schema.columns());
-    // println!("column indices: {:?}", column_indices.collect());
     let mut base_nodes = Vec::new();
     let mut base_nodes_set = HashSet::new();
     let mut leaves = HashMap::<*const Type, usize>::new();
     for c in column_indices {
         let column = parquet_schema.column(c).self_type() as *const Type;
-        println!("column: {:?}", parquet_schema.column(c).name());
-        println!("c: {:?}", c);
         let root = parquet_schema.get_column_root_ptr(c);
         let root_raw_ptr = root.clone().as_ref() as *const Type;
 
@@ -1147,7 +1142,7 @@ where
             base_nodes_set.insert(root_raw_ptr);
         }
     }
-    println!("leaves: {:?}", leaves);
+
     if leaves.is_empty() {
         return Err(general_err!("Can't build array reader without columns!"));
     }
@@ -1197,10 +1192,9 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         cur_type: TypePtr,
         context: &'a ArrayReaderBuilderContext,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
-        // println!("visiting primitive with cur type: {:?}", cur_type);
         if self.is_included(cur_type.as_ref()) {
-            // println!("i'm included");
             let mut new_context = context.clone();
+
             if cur_type.name().to_string() != "item" {
                 new_context.path.append(vec![cur_type.name().to_string()]);
             }
@@ -1224,7 +1218,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
                 Ok(Some(reader))
             }
         } else {
-            // println!("not included");
             Ok(None)
         }
     }
@@ -1348,7 +1341,6 @@ impl<'a> ArrayReaderBuilder {
         columns_included: Rc<HashMap<*const Type, usize>>,
         file_reader: Rc<dyn FileReader>,
     ) -> Self {
-        println!("columns_included: {:?}", columns_included);
         Self {
             root_schema,
             columns_included,
@@ -1370,8 +1362,6 @@ impl<'a> ArrayReaderBuilder {
 
     /// Check whether one column in included in this array reader builder.
     fn is_included(&self, t: &Type) -> bool {
-        // println!("columns included: {:?}", self.columns_included);
-        // println!("t: {:?}", t);
         self.columns_included.contains_key(&(t as *const Type))
     }
 
@@ -1452,21 +1442,16 @@ impl<'a> ArrayReaderBuilder {
         let mut fields = Vec::with_capacity(cur_type.get_fields().len());
         let mut children_reader = Vec::with_capacity(cur_type.get_fields().len());
         for child in cur_type.get_fields() {
-            // println!("child: {:?}", child);
             if let Some(child_reader) = self.dispatch(child.clone(), context)? {
                 fields.push(Field::new(
                     child.name(),
                     child_reader.get_data_type().clone(),
                     child.is_optional(),
                 ));
-                // println!("child reader type: {:?}", child_reader.get_data_type());
                 children_reader.push(child_reader);
-            } else {
-                // println!("no child reader type");
             }
         }
-        // println!("len of children reader: {:?}", children_reader.len());
-        // panic!();
+
         if !fields.is_empty() {
             let arrow_type = ArrowType::Struct(fields);
             Ok(Some(Box::new(StructArrayReader::new(

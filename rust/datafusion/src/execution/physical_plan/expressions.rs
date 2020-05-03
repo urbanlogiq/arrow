@@ -27,8 +27,8 @@ use crate::execution::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::logicalplan::{Operator, ScalarValue};
 use arrow::array::{
     ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, StringArray, TimestampNanosecondArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array, StructArray,
+    Int64Array, Int8Array, StringArray, StructArray, TimestampNanosecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::array::{
     Float32Builder, Float64Builder, Int16Builder, Int32Builder, Int64Builder,
@@ -105,22 +105,17 @@ impl PhysicalExpr for Column {
 
     /// Evaluate the expression
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        // // // MORGAN
-        println!("batch columns: {:?}", batch.columns());
-        println!("batch schema: {:?}", batch.schema());
-        println!("SELF.INDEX: {:?}, SELF.NAME: {:?}", self.index, self.name);
-        let mut true_inner_idx = 0;
-
         let mut column_idx = 0;
+        let mut inner_idx = 0;
         let mut current_flat_idx = 0;
         let mut current_outer_idx = 0;
         for i in 0..batch.columns().len() {
             let field = batch.schema().field(i);
             if let DataType::Struct(inner_fields) = field.data_type() {
-                for inner_idx in 0..inner_fields.len() {
+                for ii in 0..inner_fields.len() {
                     if current_flat_idx == self.index {
                         column_idx = current_outer_idx;
-                        true_inner_idx = inner_idx;
+                        inner_idx = ii;
                     }
                     current_flat_idx = current_flat_idx + 1;
                 }
@@ -132,22 +127,20 @@ impl PhysicalExpr for Column {
             }
             current_outer_idx = current_outer_idx + 1;
         }
-        println!("PhysicalExpr about to evaluate column_idx: {:?}, self.index: {:?}, inner_idx: {:?}", column_idx, self.index, true_inner_idx);
-        if let DataType::Struct(inner_fields) = batch.column(column_idx).data_type() {
-            let true_column = batch
-                .column(column_idx)
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .unwrap()
-                .column(true_inner_idx)
-                .clone();
-            println!("true column: {:?}", true_column);
-            return Ok(true_column);
+
+        match batch.column(column_idx).data_type() {
+            DataType::Struct(_) => {
+                let column = batch
+                    .column(column_idx)
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .unwrap()
+                    .column(inner_idx)
+                    .clone();
+                Ok(column)
+            }
+            _ => Ok(batch.column(column_idx).clone()),
         }
-        Ok(batch.column(column_idx).clone())
-        // println!("batch.column s().len(): {:?}", batch.columns().len());
-        // println!("self.index: {:?}, self.name: {:?}", self.index, self.name);
-        // Ok(batch.column(self.index).clone())
     }
 }
 

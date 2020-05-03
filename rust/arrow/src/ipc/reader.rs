@@ -427,12 +427,11 @@ pub(crate) fn read_record_batch(
             node_index,
             buffer_index,
         );
-        println!("triple: {:?}", triple);
         node_index = triple.1;
         buffer_index = triple.2;
         arrays.push(triple.0);
     }
-    println!("trying from read_record_batch");
+
     RecordBatch::try_new(schema.clone(), arrays).map(|batch| Some(batch))
 }
 

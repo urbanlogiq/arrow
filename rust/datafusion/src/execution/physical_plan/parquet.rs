@@ -25,7 +25,7 @@ use std::thread;
 use crate::error::{ExecutionError, Result};
 use crate::execution::physical_plan::common;
 use crate::execution::physical_plan::{BatchIterator, ExecutionPlan, Partition};
-use arrow::datatypes::{Schema, DataType};
+use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use parquet::file::reader::SerializedFileReader;
 
@@ -60,7 +60,7 @@ impl ParquetExec {
             let file_reader = Rc::new(SerializedFileReader::new(file)?);
             let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
             let schema = arrow_reader.get_schema()?;
-            // println!("in parquetexec try_new. schema: {:?}, given projections: {:?}", schema, projection);
+
             let projection = match projection {
                 Some(p) => p,
                 None => (0..schema.fields().len()).collect(),
@@ -89,12 +89,10 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn partitions(&self) -> Result<Vec<Arc<dyn Partition>>> {
-        println!("trying to get partitions");
         let partitions = self
             .filenames
             .iter()
             .map(|filename| {
-                println!("in execution plan partitions. self.projections: {:?}, self.schema: {:?}", self.projection.clone(), self.schema.clone());
                 Arc::new(ParquetPartition::new(
                     &filename,
                     self.projection.clone(),
@@ -103,7 +101,6 @@ impl ExecutionPlan for ParquetExec {
                 )) as Arc<dyn Partition>
             })
             .collect();
-        println!("got partitions");
         Ok(partitions)
     }
 }
@@ -120,8 +117,6 @@ impl ParquetPartition {
         schema: Arc<Schema>,
         batch_size: usize,
     ) -> Self {
-        println!("new ParquetPartition projections: {:?}", projection);
-        println!("new ParquetPartition schema: {:?}", schema);
         // because the parquet implementation is not thread-safe, it is necessary to execute
         // on a thread and communicate with channels
         let (request_tx, request_rx): (Sender<()>, Receiver<()>) = unbounded();
@@ -131,19 +126,18 @@ impl ParquetPartition {
         ) = unbounded();
 
         let filename = filename.to_string();
-        // MORGAN
-        let mut real_projection = Vec::new();
+
+        let mut flat_projection = Vec::new();
         for i in 0..projection.len() {
             let field = schema.field(i);
             if let DataType::Struct(inner_fields) = field.data_type() {
-                for inner_idx in i..(i + inner_fields.len()) {
-                    real_projection.push(inner_idx + projection[i]);
+                for ii in i..(i + inner_fields.len()) {
+                    flat_projection.push(ii + projection[i]);
                 }
             } else {
-                real_projection.push(projection[i]);
+                flat_projection.push(projection[i]);
             }
         }
-        println!("new ParquetPartition real projections: {:?}", real_projection);
 
         thread::spawn(move || {
             //TODO error handling, remove unwraps
@@ -157,7 +151,7 @@ impl ParquetPartition {
                     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
 
                     match arrow_reader
-                        .get_record_reader_by_columns(real_projection, batch_size)
+                        .get_record_reader_by_columns(flat_projection, batch_size)
                     {
                         Ok(mut batch_reader) => {
                             while let Ok(_) = request_rx.recv() {

@@ -348,7 +348,7 @@ impl<R: Read> Reader<R> {
             .collect();
 
         let projected_schema = Arc::new(Schema::new(projected_fields));
-        println!("trying from csv reader");
+
         arrays.and_then(|arr| {
             RecordBatch::try_new(projected_schema, arr).map(|batch| Some(batch))
         })

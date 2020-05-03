@@ -26,9 +26,9 @@ use crate::error::Result;
 use crate::execution::physical_plan::{
     BatchIterator, ExecutionPlan, Partition, PhysicalExpr,
 };
-use arrow::datatypes::{Field, Schema, DataType};
+use arrow::array::{ArrayRef, StructArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow::array::{StructArray, ArrayRef};
 
 /// Execution plan for a projection
 pub struct ProjectionExec {
@@ -39,7 +39,7 @@ pub struct ProjectionExec {
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
 }
-// MORGAN
+
 impl ProjectionExec {
     /// Create a projection on an input
     pub fn try_new(
@@ -48,29 +48,31 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
-        let mut real_fields = Vec::new();
+        let mut flat_fields = Vec::new();
         for field in input_schema.fields() {
             if let DataType::Struct(inner_fields) = field.data_type() {
                 for inner_field in inner_fields.iter() {
-                    real_fields.push(inner_field.clone());
+                    flat_fields.push(inner_field.clone());
                 }
             } else {
-                real_fields.push(field.clone());
+                flat_fields.push(field.clone());
             }
         }
 
-        let flattened_input_schema = Schema::new(real_fields);
-        println!("input schema: {:?}", input_schema);
-        println!("flattened input schema: {:?}", flattened_input_schema);
+        let flat_input_schema = Schema::new(flat_fields);
         let fields: Result<Vec<_>> = expr
             .iter()
             .map(|e| {
-                Ok(Field::new(&e.name(), e.data_type(&flattened_input_schema)?, true))
+                Ok(Field::new(
+                    &e.name(),
+                    e.data_type(&flat_input_schema)?,
+                    true,
+                ))
             })
             .collect();
-        println!("fields in ProjectionExec: {:?}", fields);
+
         let schema = Arc::new(Schema::new(fields?));
-        println!("schema in ProjectionExec: {:?}", schema);
+
         Ok(Self {
             expr: expr.clone(),
             schema,
@@ -142,68 +144,43 @@ impl BatchIterator for ProjectionIterator {
         let mut input = self.input.lock().unwrap();
         match input.next()? {
             Some(batch) => {
+                let arrays = self
+                    .expr
+                    .iter()
+                    .map(|expr| expr.evaluate(&batch))
+                    .collect::<Result<Vec<_>>>()?;
 
-                println!("batch.schema(): {:?}", batch.schema());
-                // panic!();
-                println!("number of expr: {:?}", self.expr.len());
+                let mut column_arrays = Vec::new();
+                let mut array_idx = 0;
 
-                // TO DO : ONLY EVALUATE THE REAL FINAL COLUMNA
-                let arrays = self.expr.iter().map(|expr| {
-                    println!("expr name: {:?}", expr.name());
-                    println!("ex");
-                    expr.evaluate(&batch)
-                }).collect::<Result<Vec<_>>>()?;
-
-                println!("arrays: {:?}", arrays);
-                // panic!();
-                let mut real_arrays = Vec::new();
-                let mut current_flat_array_index = 0;
-                for i in 0..batch.schema().fields().len() {
-                    let expected_field = batch.schema().field(0);
-                    if let DataType::Struct(inner_fields) = expected_field.data_type() {
-                        let mut field_array_pairs = Vec::new();
-                        let starting_flat_array_index = current_flat_array_index;
-                        for ii in 0..inner_fields.len() {
-                            println!("inner_fields[{:?}]: {:?}", ii, inner_fields[ii]);
-                            println!("arrays[{:?}]: {:?}", current_flat_array_index + ii, inner_fields);
-                            field_array_pairs.push((
-                                inner_fields[ii].clone(),
-                                arrays[starting_flat_array_index + ii].clone(),
-                            ));
-                            current_flat_array_index = current_flat_array_index + 1;
+                for field in batch.schema().fields() {
+                    match field.data_type() {
+                        DataType::Struct(inner_fields) => {
+                            let mut field_array_pairs = Vec::new();
+                            let column_start_idx = array_idx;
+                            for ii in 0..inner_fields.len() {
+                                field_array_pairs.push((
+                                    inner_fields[ii].clone(),
+                                    arrays[column_start_idx + ii].clone(),
+                                ));
+                                array_idx = array_idx + 1;
+                            }
+                            let struct_array =
+                                Arc::new(StructArray::from(field_array_pairs))
+                                    as ArrayRef;
+                            column_arrays.push(struct_array);
                         }
-                        let struct_array = Arc::new(StructArray::from(field_array_pairs)) as ArrayRef;
-                        real_arrays.push(struct_array);
-                    } else {
-                        // let tru_arr = arrays[current_flat_array_index] as ArrayRef;
-                        real_arrays.push(arrays[current_flat_array_index].clone());
-                        current_flat_array_index = current_flat_array_index + 1;
+                        _ => {
+                            column_arrays.push(arrays[array_idx].clone());
+                            array_idx = array_idx + 1;
+                        }
                     }
                 }
-                // let mut current_outer_idx = 0;
-                // let mut result_fields = Vec::new();
-                // let batch_schema = batch.schema();
-                //
-                // for i in 0..arrays.len() {
-                //     match arrays[i].data_type() {
-                //         DataType::Struct(fields) => {
-                //             let batch_field = batch_schema.field(current_outer_idx);
-                //             let batch_field_name = batch_field.name();
-                //             let struct_field = Field::new(batch_field_name, DataType::Struct(fields.clone()), true);
-                //             result_fields.push(struct_field);
-                //         },
-                //         _ => {
-                //             println!("self.schema.fields()[current_outer_idx].clone(): {:?}", self.schema.fields()[current_outer_idx].clone());
-                //             println!("batch_schema.field(current_outer_idx): {:?}", batch_schema.field(current_outer_idx));
-                //             let result_field = self.schema.fields()[current_outer_idx].clone();
-                //             result_fields.push(result_field);
-                //         }
-                //     }
-                //     current_outer_idx = current_outer_idx + 1;
-                // }
-                // let schema = Arc::new(Schema::new(result_fields));
-                Ok(Some(RecordBatch::try_new(batch.schema().clone(), real_arrays)?))
 
+                Ok(Some(RecordBatch::try_new(
+                    batch.schema().clone(),
+                    column_arrays,
+                )?))
             }
             None => Ok(None),
         }

@@ -34,7 +34,6 @@ pub fn print_batches(results: &Vec<RecordBatch>) -> Result<()> {
 
 ///! Convert a series of record batches into a table
 pub fn create_table(results: &Vec<RecordBatch>) -> Result<Table> {
-    println!("in repl create table");
     let mut table = Table::new();
     table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
 
@@ -49,11 +48,6 @@ pub fn create_table(results: &Vec<RecordBatch>) -> Result<Table> {
         header.push(Cell::new(&field.name()));
     }
     table.set_titles(Row::new(header));
-
-    for batch in results {
-        println!("batch.column(0): {:?}", batch.column(0));
-        println!("batch.column(1): {:?}", batch.column(1));
-    }
 
     for batch in results {
         for row in 0..batch.num_rows() {
@@ -113,9 +107,9 @@ macro_rules! make_string_from_struct {
         for i in 0..struct_array.num_columns() {
             let key = struct_array.column_names()[i];
             let val = array_value_to_string(struct_array.column(i).clone(), $row)?;
-            string_values.push(format!("{}: {}\n", key, val));
+            string_values.push(format!("{}: {}", key, val));
         }
-        Ok(format!("[{}]", string_values.join(", ")))
+        Ok(format!("{{{}}}", string_values.join(", ")))
     }};
 }
 

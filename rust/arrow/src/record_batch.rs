@@ -49,10 +49,6 @@ impl RecordBatch {
                     .to_string(),
             ));
         }
-        println!("schema.fields().len(): {:?}", schema.fields().len());
-        println!("columns.len(): {:?}", columns.len());
-        println!("schema.fields(): {:?}", schema.fields());
-        println!("columns: {:?}", columns);
         // check that number of fields in schema match column length
         if schema.fields().len() != columns.len() {
             return Err(ArrowError::InvalidArgumentError(
@@ -60,10 +56,8 @@ impl RecordBatch {
             ));
         }
         // check that all columns have the same row count, and match the schema
-        println!("columns[0].data(): {:?}", columns[0].data());
         let len = columns[0].data().len();
         for i in 0..columns.len() {
-            println!("columns[{:?}].len(): {:?}", i, columns[i].len());
             if columns[i].len() != len {
                 return Err(ArrowError::InvalidArgumentError(
                     "all columns in a record batch must have the same length".to_string(),
@@ -77,7 +71,6 @@ impl RecordBatch {
                     i)));
             }
         }
-        println!("making new recordbatch");
         Ok(RecordBatch { schema, columns })
     }
 

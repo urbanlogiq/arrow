@@ -891,7 +891,7 @@ mod tests {
 
     #[test]
     fn test_file_reader_rows_nulls() {
-        let rows = test_file_reader_rows("area_report.parquet", None).unwrap();
+        let rows = test_file_reader_rows("nulls.snappy.parquet", None).unwrap();
         let expected_rows = vec![
             row![(
                 "b_struct".to_string(),
