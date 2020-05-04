@@ -105,33 +105,66 @@ impl PhysicalExpr for Column {
 
     /// Evaluate the expression
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let mut column_idx = 0;
-        let mut inner_idx = 0;
-        let mut current_flat_idx = 0;
-        let mut current_outer_idx = 0;
-        for i in 0..batch.columns().len() {
-            let field = batch.schema().field(i);
-            if let DataType::Struct(inner_fields) = field.data_type() {
-                for ii in 0..inner_fields.len() {
-                    if current_flat_idx == self.index {
-                        column_idx = current_outer_idx;
-                        inner_idx = ii;
+        // Each non-struct field in the RecordBatch schema is uniquely associated with a column in the parquet,
+        // however struct fields contain multiple parquet columns, one for each of their attributes.
+        // For datafusion's SQL querying purposes, all columns from the same field are queried as a single column.
+        // For example, assume the following parquet "businesses":
+        // +---------------------------------+---------------------------------+
+        // |             employees          |             sector               |
+        // +---------------------------------+---------------------------------+
+        // | {part_time: 10, full_time: 54} |            restaurant            |
+        // | {part_time: 5, full_time: 40}  |            retail                |
+        // +---------------------------------+---------------------------------+
+        // This parquet has 3 primitive columns: "part_time", "full_time", and "sector".
+        // When the query "SELECT employees, sector FROM businesses;" is issued,
+        // this function will be called for each parquet column i.e. once each for "part_time", "full_time", and "sector".
+        // self.index will be the index of the parquet column i.e. "part_time": 0, "full_time": 1, "sector": 2
+
+        // We need to keep track of the index of the top-level field associated with the current column being evaluated
+        // i.e. the column that was named in the SQL query.
+        let mut top_level_idx = 0; // This will be set to 0 for both part_time and full_time, and 1 for sector.
+
+        // We need to keep track of the 'inner' index of this column i.e. if it's in a struct, its place within the struct. For columns not in a struct, this will be 0.
+        let mut inner_idx = 0; // This will be set to 0 for part_time, 1 for full_time, and 0 for sector.
+
+        let mut current_pq_col_idx = 0; // index of the current PARQUET column being traversed. Will be incremented for each of part_time, full_time, and sector.
+
+        // index of the current top level field being traversed. Will be incremented for each of part_time and sector.
+        let mut current_top_level_idx = 0; // Will not be incremented for full_time because full_time is within the same field as part_time.
+
+        let fields = batch.schema().fields(); // There will be 2 fields in this case: 1. employees (struct); 2. sector (UTF8)
+        for field in fields.iter() {
+            match field.data_type() {
+                DataType::Struct(inner_fields) => {
+                    for i in (0..inner_fields.len()).into_iter() {
+                        // If the top-level field is a struct, we need to visit each of the struct's associated parquet columns
+                        if current_pq_col_idx == self.index {
+                            // For example, if the current column being evaluated is "full_time", then self.index = 1
+                            top_level_idx = current_top_level_idx; // top_level_idx will be set to 0, because "full_time" is associated with "employees" which is the first field.
+                            inner_idx = i; // inner_idx will be set to 1, because "full_time" is the 2nd column associated with the top-level field "employees".
+                            break;
+                        }
+                        current_pq_col_idx = current_pq_col_idx + 1;
                     }
-                    current_flat_idx = current_flat_idx + 1;
                 }
-            } else {
-                if current_flat_idx == self.index {
-                    column_idx = current_outer_idx;
+                _ => {
+                    // If the top level field is not a struct, there is only a single associated parquet column.
+                    if current_pq_col_idx == self.index {
+                        // For example, if the current column being evaluated is "sector", then self.index = 2
+                        top_level_idx = current_top_level_idx; // and top_level_idx will be set to 1, because "sector" is the 2nd top-level field.
+                        break;
+                    }
+                    current_pq_col_idx = current_pq_col_idx + 1;
                 }
-                current_flat_idx = current_flat_idx + 1;
             }
-            current_outer_idx = current_outer_idx + 1;
+            current_top_level_idx = current_top_level_idx + 1; // increment the outer SQL-queryable column index for each top-level field
         }
 
-        match batch.column(column_idx).data_type() {
+        match batch.column(top_level_idx).data_type() {
             DataType::Struct(_) => {
+                // if the current column lies within a struct, we need to return only the relevant column within the struct
                 let column = batch
-                    .column(column_idx)
+                    .column(top_level_idx)
                     .as_any()
                     .downcast_ref::<StructArray>()
                     .unwrap()
@@ -139,7 +172,7 @@ impl PhysicalExpr for Column {
                     .clone();
                 Ok(column)
             }
-            _ => Ok(batch.column(column_idx).clone()),
+            _ => Ok(batch.column(top_level_idx).clone()), // if the current column does not lie within a struct, we can just return the top-level column
         }
     }
 }

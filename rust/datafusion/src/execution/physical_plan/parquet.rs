@@ -127,18 +127,6 @@ impl ParquetPartition {
 
         let filename = filename.to_string();
 
-        let mut flat_projection = Vec::new();
-        for i in 0..projection.len() {
-            let field = schema.field(i);
-            if let DataType::Struct(inner_fields) = field.data_type() {
-                for ii in i..(i + inner_fields.len()) {
-                    flat_projection.push(ii + projection[i]);
-                }
-            } else {
-                flat_projection.push(projection[i]);
-            }
-        }
-
         thread::spawn(move || {
             //TODO error handling, remove unwraps
 
@@ -151,7 +139,7 @@ impl ParquetPartition {
                     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
 
                     match arrow_reader
-                        .get_record_reader_by_columns(flat_projection, batch_size)
+                        .get_record_reader_by_columns(projection, batch_size)
                     {
                         Ok(mut batch_reader) => {
                             while let Ok(_) = request_rx.recv() {
