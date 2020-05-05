@@ -45,8 +45,8 @@ cli = ["rustyline"]
 
 [dependencies]
 fnv = "1.0"
-arrow = { path = "../arrow", version = "1.0.0-SNAPSHOT" }
-parquet = { path = "../parquet", version = "1.0.0-SNAPSHOT" }
+arrow = { path = "../arrow", version = "0.18.0-SNAPSHOT" }
+parquet = { path = "../parquet", version = "0.18.0-SNAPSHOT" }
 sqlparser = { git = "https://github.com/urbanlogiq/sqlparser-rs", branch="ul_sqlparser" }
 clap = "2.33"
 prettytable-rs = "0.8.0"
