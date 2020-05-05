@@ -190,12 +190,20 @@ impl<W: Write> StreamWriter<W> {
         Ok(())
     }
 
+    // /// Write continuation bytes, and mark the stream as done
+    // pub fn finish(&mut self) -> Result<()> {
+    //     self.writer.write(&[0u8, 0, 0, 0])?;
+    //     self.writer.write(&[255u8, 255, 255, 255])?;
+    //     self.finished = true;
+    //
+    //     Ok(())
+    // }
     /// Write continuation bytes, and mark the stream as done
     pub fn finish(&mut self) -> Result<()> {
-        self.writer.write(&[0u8, 0, 0, 0])?;
-        self.writer.write(&[255u8, 255, 255, 255])?;
+        self.writer.write_all(&[255u8, 255, 255, 255])?;
+        self.writer.write_all(&[0u8, 0, 0, 0])?;
+        self.writer.flush()?;
         self.finished = true;
-
         Ok(())
     }
 }
