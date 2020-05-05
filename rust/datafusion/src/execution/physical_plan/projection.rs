@@ -48,24 +48,29 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
-        let mut flat_fields = Vec::new();
+        // The columns contained within struct type fields will each have their own physical expr.
+        // However, these columns do not have a 1:1 relationship with top-level fields in the schema.
+        // In order to assign the correct column types for the projected columns,
+        // we must build and use for the projection a schema which contains primitive fields for each column contained in a struct field.
+        // The original input schema must be maintained so that the columns associated with each struct field can be zipped back up together into structarrays after the projection is performed
+        let mut column_fields = Vec::new();
         for field in input_schema.fields() {
             if let DataType::Struct(inner_fields) = field.data_type() {
                 for inner_field in inner_fields.iter() {
-                    flat_fields.push(inner_field.clone());
+                    column_fields.push(inner_field.clone());
                 }
             } else {
-                flat_fields.push(field.clone());
+                column_fields.push(field.clone()); // non-struct fields have a 1:1 relationship with columns in the input schema
             }
         }
 
-        let flat_input_schema = Schema::new(flat_fields);
+        let projection_schema = Schema::new(column_fields);
         let fields: Result<Vec<_>> = expr
             .iter()
             .map(|e| {
                 Ok(Field::new(
                     &e.name(),
-                    e.data_type(&flat_input_schema)?,
+                    e.data_type(&projection_schema)?,
                     true,
                 ))
             })
