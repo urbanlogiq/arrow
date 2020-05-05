@@ -150,27 +150,32 @@ impl BatchIterator for ProjectionIterator {
                     .map(|expr| expr.evaluate(&batch))
                     .collect::<Result<Vec<_>>>()?;
 
-                let mut column_arrays = Vec::new();
-                let mut array_idx = 0;
+                // For struct-type fields, each struct attribute has its own parquet column and gets evaluated individually.
+                // Now that we have evaluated our columns (see comments in evaluate in impl PhysicalExpr for Column)
+                // we have to put the columns that belong to structs back together into StructArrays so that the correct schema is returned.
 
-                for field in batch.schema().fields() {
+                let mut column_arrays = Vec::new(); // Final columns to be returned from the SQL query. One column per top-level field in the parquet schema.
+                let mut array_idx = 0; // We need to keep track of the current index within the evaluated arrays as we traverse the evaluated arrays.
+                for field in batch.schema().fields().iter() {
                     match field.data_type() {
                         DataType::Struct(inner_fields) => {
+                            // For each struct-type top level field in the batch schema, we need to collect all contained arrays
                             let mut field_array_pairs = Vec::new();
-                            let column_start_idx = array_idx;
-                            for ii in 0..inner_fields.len() {
+                            for inner_field in inner_fields.iter() {
                                 field_array_pairs.push((
-                                    inner_fields[ii].clone(),
-                                    arrays[column_start_idx + ii].clone(),
+                                    // every column associated with this struct field will be combined into a StructArray
+                                    inner_field.clone(),
+                                    arrays[array_idx].clone(),
                                 ));
                                 array_idx = array_idx + 1;
                             }
                             let struct_array =
                                 Arc::new(StructArray::from(field_array_pairs))
                                     as ArrayRef;
-                            column_arrays.push(struct_array);
+                            column_arrays.push(struct_array); // The final returned column is a StructArray
                         }
                         _ => {
+                            // Each non-struct top level field is 1:1 associated with an evaluated array
                             column_arrays.push(arrays[array_idx].clone());
                             array_idx = array_idx + 1;
                         }

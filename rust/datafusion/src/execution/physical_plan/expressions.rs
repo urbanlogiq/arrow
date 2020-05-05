@@ -117,8 +117,9 @@ impl PhysicalExpr for Column {
         // +---------------------------------+---------------------------------+
         // This parquet has 3 primitive columns: "part_time", "full_time", and "sector".
         // When the query "SELECT employees, sector FROM businesses;" is issued,
-        // this function will be called for each parquet column i.e. once each for "part_time", "full_time", and "sector".
-        // self.index will be the index of the parquet column i.e. "part_time": 0, "full_time": 1, "sector": 2
+        // this function "evaluate" will be called for each parquet column i.e. once each for "part_time", "full_time", and "sector".
+        // self.index will be the index of the parquet column i.e. "part_time": 0, "full_time": 1, "sector": 2.
+        // The schema of the batch, however, will reflect the top-level fields:  1. employees (struct); 2. sector (UTF8).
 
         // We need to keep track of the index of the top-level field associated with the current column being evaluated
         // i.e. the column that was named in the SQL query.
@@ -128,21 +129,18 @@ impl PhysicalExpr for Column {
         let mut inner_idx = 0; // This will be set to 0 for part_time, 1 for full_time, and 0 for sector.
 
         let mut current_pq_col_idx = 0; // index of the current PARQUET column being traversed. Will be incremented for each of part_time, full_time, and sector.
-
-        // index of the current top level field being traversed. Will be incremented for each of part_time and sector.
-        let mut current_top_level_idx = 0; // Will not be incremented for full_time because full_time is within the same field as part_time.
-
         let fields = batch.schema().fields(); // There will be 2 fields in this case: 1. employees (struct); 2. sector (UTF8)
-        for field in fields.iter() {
+
+        'outer: for (i, field) in fields.iter().enumerate() {
             match field.data_type() {
                 DataType::Struct(inner_fields) => {
-                    for i in (0..inner_fields.len()).into_iter() {
+                    for ii in (0..inner_fields.len()).into_iter() {
                         // If the top-level field is a struct, we need to visit each of the struct's associated parquet columns
                         if current_pq_col_idx == self.index {
                             // For example, if the current column being evaluated is "full_time", then self.index = 1
-                            top_level_idx = current_top_level_idx; // top_level_idx will be set to 0, because "full_time" is associated with "employees" which is the first field.
-                            inner_idx = i; // inner_idx will be set to 1, because "full_time" is the 2nd column associated with the top-level field "employees".
-                            break;
+                            top_level_idx = i; // top_level_idx will be set to 0, because "full_time" is associated with "employees" which is the first field.
+                            inner_idx = ii; // inner_idx will be set to 1, because "full_time" is the 2nd column associated with the top-level field "employees".
+                            break 'outer;
                         }
                         current_pq_col_idx = current_pq_col_idx + 1;
                     }
@@ -151,13 +149,12 @@ impl PhysicalExpr for Column {
                     // If the top level field is not a struct, there is only a single associated parquet column.
                     if current_pq_col_idx == self.index {
                         // For example, if the current column being evaluated is "sector", then self.index = 2
-                        top_level_idx = current_top_level_idx; // and top_level_idx will be set to 1, because "sector" is the 2nd top-level field.
-                        break;
+                        top_level_idx = i; // and top_level_idx will be set to 1, because "sector" is the 2nd top-level field.
+                        break 'outer;
                     }
                     current_pq_col_idx = current_pq_col_idx + 1;
                 }
             }
-            current_top_level_idx = current_top_level_idx + 1; // increment the outer SQL-queryable column index for each top-level field
         }
 
         match batch.column(top_level_idx).data_type() {

@@ -317,8 +317,9 @@ impl ExecutionContext {
                                     fields.push(inner_field.clone());
                                 }
                                 // add projection expressions for the each of the contained columns of each struct field in the original projection
-                                for idx in (current_pq_col_idx
-                                    ..(current_pq_col_idx + inner_fields.len()))
+                                let field_start_idx = current_pq_col_idx; // column index in the parquet of the first column belonging to the Struct
+                                for idx in (field_start_idx
+                                    ..(field_start_idx + inner_fields.len()))
                                     .into_iter()
                                 {
                                     proj_expr.push(Expr::Column(idx));
@@ -333,11 +334,11 @@ impl ExecutionContext {
                             }
                         }
                     } else {
-                        proj_expr.push(e.clone()); // leave non-projection expressions are unchanged.
+                        proj_expr.push(e.clone()); // leave non-projection expressions unchanged.
                     }
                 }
                 // Define a new schema where the inner fields of each top-level struct field replace that struct field. Non-struct fields will be unchanged in the schema.
-                let schema = Schema::new(fields); // in the example, "full_time" and "part_time" will replace "employees" in the schema of the physical expression
+                let schema = Schema::new(fields.clone()); // in the example, "full_time" and "part_time" will replace "employees" in the schema of the physical expression
                 let runtime_expr = proj_expr
                     .iter()
                     .map(|e| self.create_physical_expr(e, &schema))
