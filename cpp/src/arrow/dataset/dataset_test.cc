@@ -44,8 +44,7 @@ TEST_F(TestInMemoryFragment, Scan) {
   auto reader = ConstantArrayGenerator::Repeat(kNumberBatches, batch);
 
   // Creates a InMemoryFragment of the same repeated batch.
-  auto fragment =
-      InMemoryFragment({static_cast<size_t>(kNumberBatches), batch}, options_);
+  auto fragment = InMemoryFragment({static_cast<size_t>(kNumberBatches), batch});
 
   AssertFragmentEquals(reader.get(), &fragment);
 }
@@ -432,10 +431,10 @@ TEST_F(TestEndToEnd, EndToEndSingleDataset) {
   // FileSystemFactoryOptions configuration class. See the docstring for more
   // information.
   FileSystemFactoryOptions options;
-  options.ignore_prefixes = {"."};
+  options.selector_ignore_prefixes = {"."};
 
   // Partitions expressions can be discovered for Dataset and Fragments.
-  // This metadata is then used in conjuction with the query filter to apply
+  // This metadata is then used in conjunction with the query filter to apply
   // the pushdown predicate optimization.
   //
   // The DirectoryPartitioning is a partitioning where the path is split with

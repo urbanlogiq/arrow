@@ -30,12 +30,12 @@ import pyarrow as pa
 
 def jvm_buffer(arrowbuf):
     """
-    Construct an Arrow buffer from io.netty.buffer.ArrowBuf
+    Construct an Arrow buffer from org.apache.arrow.memory.ArrowBuf
 
     Parameters
     ----------
 
-    arrowbuf: io.netty.buffer.ArrowBuf
+    arrowbuf: org.apache.arrow.memory.ArrowBuf
         Arrow Buffer representation on the JVM.
 
     Returns
@@ -277,9 +277,14 @@ def array(jvm_array):
             "Cannot convert JVM Arrow array of type {},"
             " complex types not yet implemented.".format(minor_type_str))
     dtype = field(jvm_array.getField()).type
-    length = jvm_array.getValueCount()
     buffers = [jvm_buffer(buf)
                for buf in list(jvm_array.getBuffers(False))]
+
+    # If JVM has an empty Vector, buffer list will be empty so create manually
+    if len(buffers) == 0:
+        return pa.array([], type=dtype)
+
+    length = jvm_array.getValueCount()
     null_count = jvm_array.getNullCount()
     return pa.Array.from_buffers(dtype, length, buffers, null_count)
 

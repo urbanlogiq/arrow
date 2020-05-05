@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This API is EXPERIMENTAL.
+
 #pragma once
 
 #include <memory>
@@ -47,6 +49,7 @@ class ARROW_DS_EXPORT IpcFileFormat : public FileFormat {
 
   Result<std::shared_ptr<WriteTask>> WriteFragment(
       FileSource destination, std::shared_ptr<Fragment> fragment,
+      std::shared_ptr<ScanOptions> options,
       std::shared_ptr<ScanContext> context) override;
 };
 

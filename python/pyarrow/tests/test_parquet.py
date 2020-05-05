@@ -18,6 +18,7 @@
 from collections import OrderedDict
 import datetime
 import decimal
+from distutils.version import LooseVersion
 import io
 import json
 import os
@@ -63,12 +64,9 @@ parametrize_legacy_dataset_not_supported = pytest.mark.parametrize(
     "use_legacy_dataset", [True, pytest.param(False, marks=pytest.mark.skip)])
 parametrize_legacy_dataset_skip_buffer = pytest.mark.parametrize(
     "use_legacy_dataset", [True, pytest.param(False, marks=pytest.mark.skip)])
-
-
-def deterministic_row_order(use_legacy_dataset, chunk_size=None):
-    # TODO(datasets) ensure to use use_threads=False with the new dataset API
-    # in the tests because otherwise the row order is not deterministic
-    return False if not use_legacy_dataset and chunk_size is not None else True
+parametrize_legacy_dataset_fixed = pytest.mark.parametrize(
+    "use_legacy_dataset", [pytest.param(True, marks=pytest.mark.xfail),
+                           pytest.param(False, marks=pytest.mark.dataset)])
 
 
 def _write_table(table, path, **kwargs):
@@ -190,10 +188,8 @@ def test_pandas_parquet_2_0_roundtrip(tempdir, chunk_size, use_legacy_dataset):
 
     _write_table(arrow_table, filename, version="2.0",
                  coerce_timestamps='ms', chunk_size=chunk_size)
-    use_threads = deterministic_row_order(use_legacy_dataset, chunk_size)
     table_read = pq.read_pandas(
-        filename, use_legacy_dataset=use_legacy_dataset,
-        use_threads=use_threads)
+        filename, use_legacy_dataset=use_legacy_dataset)
     assert table_read.schema.pandas_metadata is not None
 
     read_metadata = table_read.schema.metadata
@@ -210,6 +206,10 @@ def test_parquet_invalid_version(tempdir):
     table = pa.table({'a': [1, 2, 3]})
     with pytest.raises(ValueError, match="Unsupported Parquet format version"):
         _write_table(table, tempdir / 'test_version.parquet', version="2.2")
+    with pytest.raises(ValueError, match="Unsupported Parquet data page " +
+                       "version"):
+        _write_table(table, tempdir / 'test_version.parquet',
+                     data_page_version="2.2")
 
 
 @parametrize_legacy_dataset
@@ -230,16 +230,19 @@ def test_chunked_table_write(use_legacy_dataset):
     # ARROW-232
     df = alltypes_sample(size=10)
 
-    batch = pa.RecordBatch.from_pandas(df)
-    table = pa.Table.from_batches([batch] * 3)
-    _check_roundtrip(
-        table, version='2.0', use_legacy_dataset=use_legacy_dataset)
+    for data_page_version in ['1.0', '2.0']:
+        batch = pa.RecordBatch.from_pandas(df)
+        table = pa.Table.from_batches([batch] * 3)
+        _check_roundtrip(
+            table, version='2.0', use_legacy_dataset=use_legacy_dataset,
+            data_page_version=data_page_version)
 
-    df, _ = dataframe_with_lists()
-    batch = pa.RecordBatch.from_pandas(df)
-    table = pa.Table.from_batches([batch] * 3)
-    _check_roundtrip(
-        table, version='2.0', use_legacy_dataset=use_legacy_dataset)
+        df, _ = dataframe_with_lists()
+        batch = pa.RecordBatch.from_pandas(df)
+        table = pa.Table.from_batches([batch] * 3)
+        _check_roundtrip(
+            table, version='2.0', use_legacy_dataset=use_legacy_dataset,
+            data_page_version=data_page_version)
 
 
 @pytest.mark.pandas
@@ -1699,7 +1702,28 @@ def test_create_parquet_dataset_multi_threaded(tempdir):
 
 @pytest.mark.pandas
 @parametrize_legacy_dataset
-def test_equivalency(tempdir, use_legacy_dataset):
+def test_read_partitioned_columns_selection(tempdir, use_legacy_dataset):
+    # ARROW-3861 - do not include partition columns in resulting table when
+    # `columns` keyword was passed without those columns
+    fs = LocalFileSystem.get_instance()
+    base_path = tempdir
+    _partition_test_for_filesystem(fs, base_path)
+
+    dataset = pq.ParquetDataset(
+        base_path, use_legacy_dataset=use_legacy_dataset)
+    result = dataset.read(columns=["values"])
+    if use_legacy_dataset:
+        # ParquetDataset implementation always includes the partition columns
+        # automatically, and we can't easily "fix" this since dask relies on
+        # this behaviour (ARROW-8644)
+        assert result.column_names == ["values", "foo", "bar"]
+    else:
+        assert result.column_names == ["values"]
+
+
+@pytest.mark.pandas
+@parametrize_legacy_dataset
+def test_filters_equivalency(tempdir, use_legacy_dataset):
     fs = LocalFileSystem.get_instance()
     base_path = tempdir
 
@@ -1787,7 +1811,7 @@ def test_equivalency(tempdir, use_legacy_dataset):
 
 @pytest.mark.pandas
 @parametrize_legacy_dataset
-def test_cutoff_exclusive_integer(tempdir, use_legacy_dataset):
+def test_filters_cutoff_exclusive_integer(tempdir, use_legacy_dataset):
     fs = LocalFileSystem.get_instance()
     base_path = tempdir
 
@@ -1829,7 +1853,7 @@ def test_cutoff_exclusive_integer(tempdir, use_legacy_dataset):
     raises=(TypeError, AssertionError),
     reason='Loss of type information in creation of categoricals.'
 )
-def test_cutoff_exclusive_datetime(tempdir, use_legacy_dataset):
+def test_filters_cutoff_exclusive_datetime(tempdir, use_legacy_dataset):
     fs = LocalFileSystem.get_instance()
     base_path = tempdir
 
@@ -1874,7 +1898,7 @@ def test_cutoff_exclusive_datetime(tempdir, use_legacy_dataset):
 
 @pytest.mark.pandas
 @parametrize_legacy_dataset
-def test_inclusive_integer(tempdir, use_legacy_dataset):
+def test_filters_inclusive_integer(tempdir, use_legacy_dataset):
     fs = LocalFileSystem.get_instance()
     base_path = tempdir
 
@@ -1910,7 +1934,7 @@ def test_inclusive_integer(tempdir, use_legacy_dataset):
 
 @pytest.mark.pandas
 @parametrize_legacy_dataset
-def test_inclusive_set(tempdir, use_legacy_dataset):
+def test_filters_inclusive_set(tempdir, use_legacy_dataset):
     fs = LocalFileSystem.get_instance()
     base_path = tempdir
 
@@ -1948,7 +1972,7 @@ def test_inclusive_set(tempdir, use_legacy_dataset):
 
 @pytest.mark.pandas
 @parametrize_legacy_dataset
-def test_invalid_pred_op(tempdir, use_legacy_dataset):
+def test_filters_invalid_pred_op(tempdir, use_legacy_dataset):
     fs = LocalFileSystem.get_instance()
     base_path = tempdir
 
@@ -1994,6 +2018,32 @@ def test_invalid_pred_op(tempdir, use_legacy_dataset):
 
 
 @pytest.mark.pandas
+@parametrize_legacy_dataset_fixed
+def test_filters_invalid_column(tempdir, use_legacy_dataset):
+    # ARROW-5572 - raise error on invalid name in filter specification
+    # works with new dataset / xfail with legacy implementation
+    fs = LocalFileSystem.get_instance()
+    base_path = tempdir
+
+    integer_keys = [0, 1, 2, 3, 4]
+    partition_spec = [['integers', integer_keys]]
+    N = 5
+
+    df = pd.DataFrame({
+        'index': np.arange(N),
+        'integers': np.array(integer_keys, dtype='i4'),
+    }, columns=['index', 'integers'])
+
+    _generate_partition_directories(fs, base_path, partition_spec, df)
+
+    msg = "Field named 'non_existent_column' not found"
+    with pytest.raises(ValueError, match=msg):
+        pq.ParquetDataset(base_path, filesystem=fs,
+                          filters=[('non_existent_column', '<', 3), ],
+                          use_legacy_dataset=use_legacy_dataset).read()
+
+
+@pytest.mark.pandas
 def test_filters_read_table(tempdir):
     # test that filters keyword is passed through in read_table
     fs = LocalFileSystem.get_instance()
@@ -2023,6 +2073,33 @@ def test_filters_read_table(tempdir):
     table = pq.read_pandas(
         base_path, filters=[('integers', '<', 3)])
     assert table.num_rows == 3
+
+
+@pytest.mark.pandas
+@parametrize_legacy_dataset_fixed
+def test_partition_keys_with_underscores(tempdir, use_legacy_dataset):
+    # ARROW-5666 - partition field values with underscores preserve underscores
+    # xfail with legacy dataset -> they get interpreted as integers
+    fs = LocalFileSystem.get_instance()
+    base_path = tempdir
+
+    string_keys = ["2019_2", "2019_3"]
+    partition_spec = [
+        ['year_week', string_keys],
+    ]
+    N = 2
+
+    df = pd.DataFrame({
+        'index': np.arange(N),
+        'year_week': np.array(string_keys, dtype='object'),
+    }, columns=['index', 'year_week'])
+
+    _generate_partition_directories(fs, base_path, partition_spec, df)
+
+    dataset = pq.ParquetDataset(
+        base_path, use_legacy_dataset=use_legacy_dataset)
+    result = dataset.read()
+    assert result.column("year_week").to_pylist() == string_keys
 
 
 @pytest.fixture
@@ -2287,9 +2364,7 @@ def test_read_multiple_files(tempdir, use_legacy_dataset):
     # Write a _SUCCESS.crc file
     (dirpath / '_SUCCESS.crc').touch()
 
-    # TODO(datasets) changed to use_threads=False because otherwise the
-    # row order is not deterministic
-    def read_multiple_files(paths, columns=None, use_threads=False, **kwargs):
+    def read_multiple_files(paths, columns=None, use_threads=True, **kwargs):
         dataset = pq.ParquetDataset(
             paths, use_legacy_dataset=use_legacy_dataset, **kwargs)
         return dataset.read(columns=columns, use_threads=use_threads)
@@ -2551,6 +2626,39 @@ def test_ignore_hidden_files_underscore(tempdir, use_legacy_dataset):
 
 @pytest.mark.pandas
 @parametrize_legacy_dataset
+@pytest.mark.parametrize('dir_prefix', ['_', '.'])
+def test_ignore_no_private_directories_path_list(
+    tempdir, dir_prefix, use_legacy_dataset
+):
+    # ARROW-8427 - don't ignore explicitly listed files if parent directory
+    # is a private directory
+    dirpath = tempdir / "{0}data".format(dir_prefix) / guid()
+    dirpath.mkdir(parents=True)
+
+    paths = _make_example_multifile_dataset(dirpath, nfiles=10,
+                                            file_nrows=5)
+
+    dataset = pq.ParquetDataset(paths, use_legacy_dataset=use_legacy_dataset)
+
+    _assert_dataset_paths(dataset, paths, use_legacy_dataset)
+
+
+@parametrize_legacy_dataset_fixed
+def test_empty_directory(tempdir, use_legacy_dataset):
+    # ARROW-5310 - reading empty directory
+    # fails with legacy implementation
+    empty_dir = tempdir / 'dataset'
+    empty_dir.mkdir()
+
+    dataset = pq.ParquetDataset(
+        empty_dir, use_legacy_dataset=use_legacy_dataset)
+    result = dataset.read()
+    assert result.num_rows == 0
+    assert result.num_columns == 0
+
+
+@pytest.mark.pandas
+@parametrize_legacy_dataset
 def test_multiindex_duplicate_values(tempdir, use_legacy_dataset):
     num_rows = 3
     numbers = list(range(num_rows))
@@ -2616,7 +2724,7 @@ def test_noncoerced_nanoseconds_written_without_exception(tempdir):
     recovered_table = pq.read_table(filename)
     assert tb.equals(recovered_table)
 
-    # Loss of data thru coercion (without explicit override) still an error
+    # Loss of data through coercion (without explicit override) still an error
     filename = tempdir / 'not_written.parquet'
     with pytest.raises(ValueError):
         pq.write_table(tb, filename, coerce_timestamps='ms', version='2.0')
@@ -2682,8 +2790,7 @@ def _test_write_to_dataset_with_partitions(base_path,
 
     assert dataset_cols == set(output_table.schema.names)
 
-    use_threads = deterministic_row_order(use_legacy_dataset)
-    input_table = dataset.read(use_threads=use_threads)
+    input_table = dataset.read()
     input_df = input_table.to_pandas()
 
     # Read data back in and compare with original DataFrame
@@ -2691,12 +2798,12 @@ def _test_write_to_dataset_with_partitions(base_path,
     input_df_cols = input_df.columns.tolist()
     assert partition_by == input_df_cols[-1 * len(partition_by):]
 
-    # Partitioned columns become 'categorical' dtypes
     input_df = input_df[cols]
     if use_legacy_dataset:
+        # Partitioned columns become 'categorical' dtypes
         for col in partition_by:
             output_df[col] = output_df[col].astype('category')
-    assert output_df.equals(input_df)
+    tm.assert_frame_equal(output_df, input_df)
 
 
 def _test_write_to_dataset_no_partitions(base_path,
@@ -2800,6 +2907,69 @@ def test_write_to_dataset_with_partitions_and_custom_filenames(tempdir):
     output_basenames = [os.path.basename(p.path) for p in dataset.pieces]
 
     assert sorted(expected_basenames) == sorted(output_basenames)
+
+
+@pytest.mark.pandas
+@parametrize_legacy_dataset
+def test_write_to_dataset_pandas_preserve_extensiondtypes(
+    tempdir, use_legacy_dataset
+):
+    # ARROW-8251 - preserve pandas extension dtypes in roundtrip
+    if LooseVersion(pd.__version__) < "1.0.0":
+        pytest.skip("__arrow_array__ added to pandas in 1.0.0")
+
+    df = pd.DataFrame({'part': 'a', "col": [1, 2, 3]})
+    df['col'] = df['col'].astype("Int64")
+    table = pa.table(df)
+
+    pq.write_to_dataset(table, str(tempdir / "case1"), partition_cols=['part'])
+    result = pq.read_table(
+        str(tempdir / "case1"), use_legacy_dataset=use_legacy_dataset
+    ).to_pandas()
+    tm.assert_frame_equal(result[["col"]], df[["col"]])
+
+    pq.write_to_dataset(table, str(tempdir / "case2"))
+    result = pq.read_table(
+        str(tempdir / "case2"), use_legacy_dataset=use_legacy_dataset
+    ).to_pandas()
+    tm.assert_frame_equal(result[["col"]], df[["col"]])
+
+    pq.write_table(table, str(tempdir / "data.parquet"))
+    result = pq.read_table(
+        str(tempdir / "data.parquet"), use_legacy_dataset=use_legacy_dataset
+    ).to_pandas()
+    tm.assert_frame_equal(result[["col"]], df[["col"]])
+
+
+@pytest.mark.pandas
+@parametrize_legacy_dataset
+def test_write_to_dataset_pandas_preserve_index(tempdir, use_legacy_dataset):
+    # ARROW-8251 - preserve pandas index in roundtrip
+
+    df = pd.DataFrame({'part': ['a', 'a', 'b'], "col": [1, 2, 3]})
+    df.index = pd.Index(['a', 'b', 'c'], name="idx")
+    table = pa.table(df)
+    df_cat = df[["col", "part"]].copy()
+    if use_legacy_dataset:
+        df_cat["part"] = df_cat["part"].astype("category")
+
+    pq.write_to_dataset(table, str(tempdir / "case1"), partition_cols=['part'])
+    result = pq.read_table(
+        str(tempdir / "case1"), use_legacy_dataset=use_legacy_dataset
+    ).to_pandas()
+    tm.assert_frame_equal(result, df_cat)
+
+    pq.write_to_dataset(table, str(tempdir / "case2"))
+    result = pq.read_table(
+        str(tempdir / "case2"), use_legacy_dataset=use_legacy_dataset
+    ).to_pandas()
+    tm.assert_frame_equal(result, df)
+
+    pq.write_table(table, str(tempdir / "data.parquet"))
+    result = pq.read_table(
+        str(tempdir / "data.parquet"), use_legacy_dataset=use_legacy_dataset
+    ).to_pandas()
+    tm.assert_frame_equal(result, df)
 
 
 @pytest.mark.large_memory
@@ -3702,7 +3872,7 @@ def test_multi_dataset_metadata(tempdir):
         'one': [1, 2, 3],
         'two': [-1, -2, -3],
         'three': [[1, 2], [2, 3], [3, 4]],
-        })
+    })
     table = pa.Table.from_pandas(df)
 
     # write dataset twice and collect/merge metadata
@@ -3761,7 +3931,7 @@ def test_filter_before_validate_schema(tempdir, use_legacy_dataset):
 
 @pytest.mark.pandas
 @pytest.mark.fastparquet
-@pytest.mark.filterwarnings("ignore:RangeIndex:DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:RangeIndex:FutureWarning")
 def test_fastparquet_cross_compatibility(tempdir):
     fp = pytest.importorskip('fastparquet')
 
@@ -3796,6 +3966,15 @@ def test_fastparquet_cross_compatibility(tempdir):
     # (no arrow schema in parquet metadata)
     df['f'] = df['f'].astype(object)
     tm.assert_frame_equal(table_fp.to_pandas(), df)
+
+
+def test_table_large_metadata():
+    # ARROW-8694
+    my_schema = pa.schema([pa.field('f0', 'double')],
+                          metadata={'large': 'x' * 10000000})
+
+    table = pa.table([np.arange(10)], schema=my_schema)
+    _check_roundtrip(table)
 
 
 @parametrize_legacy_dataset_skip_buffer

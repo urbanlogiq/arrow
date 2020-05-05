@@ -26,8 +26,8 @@
 #include "arrow/type_traits.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/decimal.h"
-#include "arrow/util/parsing.h"
 #include "arrow/util/string_view.h"
+#include "arrow/util/value_parsing.h"
 
 #include "arrow/json/rapidjson_defs.h"
 
@@ -802,19 +802,8 @@ Status GetConverter(const std::shared_ptr<DataType>& type,
     SIMPLE_CONVERTER_CASE(Type::FIXED_SIZE_BINARY, FixedSizeBinaryConverter)
     SIMPLE_CONVERTER_CASE(Type::DECIMAL, DecimalConverter)
     SIMPLE_CONVERTER_CASE(Type::UNION, UnionConverter)
-    case Type::INTERVAL: {
-      switch (checked_cast<const IntervalType&>(*type).interval_type()) {
-        case IntervalType::MONTHS:
-          res = std::make_shared<IntegerConverter<MonthIntervalType>>(type);
-          break;
-        case IntervalType::DAY_TIME:
-          res = std::make_shared<DayTimeIntervalConverter>(type);
-          break;
-        default:
-          return not_implemented();
-      }
-      break;
-    }
+    SIMPLE_CONVERTER_CASE(Type::INTERVAL_MONTHS, IntegerConverter<MonthIntervalType>)
+    SIMPLE_CONVERTER_CASE(Type::INTERVAL_DAY_TIME, DayTimeIntervalConverter)
     default:
       return not_implemented();
   }

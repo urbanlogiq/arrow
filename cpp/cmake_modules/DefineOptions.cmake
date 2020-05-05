@@ -95,9 +95,6 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
   define_option(ARROW_USE_PRECOMPILED_HEADERS "Use precompiled headers when compiling"
                 OFF)
 
-  # Disable this option to exercise non-SIMD fallbacks
-  define_option(ARROW_USE_SIMD "Build with SIMD optimizations" ON)
-
   define_option_string(ARROW_SIMD_LEVEL
                        "SIMD compiler optimization level"
                        "SSE4_2" # default to SSE4.2
@@ -108,7 +105,11 @@ if("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}")
 
   # Arm64 architectures and extensions can lead to exploding combinations.
   # So set it directly through cmake command line.
-  define_option_string(ARROW_ARMV8_ARCH "Arm64 arch and extensions" "armv8-a+crc+crypto")
+  define_option_string(ARROW_ARMV8_ARCH
+                       "Arm64 arch and extensions"
+                       "armv8-a" # Default
+                       "armv8-a"
+                       "armv8-a+crc+crypto")
 
   define_option(ARROW_ALTIVEC "Build with Altivec if compiler has support" ON)
 

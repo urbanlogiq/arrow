@@ -167,6 +167,21 @@ pub trait BufferBuilderTrait<T: ArrowPrimitiveType> {
     /// ```
     fn append(&mut self, value: T::Native) -> Result<()>;
 
+    /// Appends a value of type `T` into the builder N times,
+    /// growing the internal buffer as needed.
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// use arrow::array::{UInt8BufferBuilder, BufferBuilderTrait};
+    ///
+    /// let mut builder = UInt8BufferBuilder::new(10);
+    /// builder.append_n(10, 42);
+    ///
+    /// assert_eq!(builder.len(), 10);
+    /// ```
+    fn append_n(&mut self, n: usize, value: T::Native) -> Result<()>;
+
     /// Appends a slice of type `T`, growing the internal buffer as needed.
     ///
     /// # Example:
@@ -214,7 +229,7 @@ impl<T: ArrowPrimitiveType> BufferBuilderTrait<T> for BufferBuilder<T> {
 
     fn capacity(&self) -> usize {
         let bit_capacity = self.buffer.capacity() * 8;
-        (bit_capacity / T::get_bit_width())
+        bit_capacity / T::get_bit_width()
     }
 
     default fn advance(&mut self, i: usize) -> Result<()> {
@@ -234,6 +249,14 @@ impl<T: ArrowPrimitiveType> BufferBuilderTrait<T> for BufferBuilder<T> {
     default fn append(&mut self, v: T::Native) -> Result<()> {
         self.reserve(1)?;
         self.write_bytes(v.to_byte_slice(), 1)
+    }
+
+    default fn append_n(&mut self, n: usize, v: T::Native) -> Result<()> {
+        self.reserve(n)?;
+        for _ in 0..n {
+            self.write_bytes(v.to_byte_slice(), 1)?;
+        }
+        Ok(())
     }
 
     default fn append_slice(&mut self, slice: &[T::Native]) -> Result<()> {
@@ -294,10 +317,21 @@ impl BufferBuilderTrait<BooleanType> for BufferBuilder<BooleanType> {
             // For performance the `len` of the buffer is not updated on each append but
             // is updated in the `freeze` method instead.
             unsafe {
-                bit_util::set_bit_raw(self.buffer.raw_data() as *mut u8, self.len);
+                bit_util::set_bit_raw(self.buffer.raw_data_mut(), self.len);
             }
         }
         self.len += 1;
+        Ok(())
+    }
+
+    fn append_n(&mut self, n: usize, v: bool) -> Result<()> {
+        self.reserve(n)?;
+        if v {
+            unsafe {
+                bit_util::set_bits_raw(self.buffer.raw_data_mut(), self.len, self.len + n)
+            }
+        }
+        self.len += n;
         Ok(())
     }
 
@@ -309,7 +343,7 @@ impl BufferBuilderTrait<BooleanType> for BufferBuilder<BooleanType> {
                 // updated on each append but is updated in the
                 // `freeze` method instead.
                 unsafe {
-                    bit_util::set_bit_raw(self.buffer.raw_data() as *mut u8, self.len);
+                    bit_util::set_bit_raw(self.buffer.raw_data_mut(), self.len);
                 }
             }
             self.len += 1;
@@ -438,7 +472,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
     /// Appends a slice of type `T` into the builder
     pub fn append_slice(&mut self, v: &[T::Native]) -> Result<()> {
-        self.bitmap_builder.append_slice(&vec![true; v.len()][..])?;
+        self.bitmap_builder.append_n(v.len(), true)?;
         self.values_builder.append_slice(v)?;
         Ok(())
     }
@@ -493,11 +527,18 @@ pub struct ListBuilder<T: ArrayBuilder> {
 impl<T: ArrayBuilder> ListBuilder<T> {
     /// Creates a new `ListArrayBuilder` from a given values array builder
     pub fn new(values_builder: T) -> Self {
-        let mut offsets_builder = Int32BufferBuilder::new(values_builder.len() + 1);
+        let capacity = values_builder.len();
+        Self::with_capacity(values_builder, capacity)
+    }
+
+    /// Creates a new `ListArrayBuilder` from a given values array builder
+    /// `capacity` is the number of items to pre-allocate space for in this builder
+    pub fn with_capacity(values_builder: T, capacity: usize) -> Self {
+        let mut offsets_builder = Int32BufferBuilder::new(capacity + 1);
         offsets_builder.append(0).unwrap();
         Self {
             offsets_builder,
-            bitmap_builder: BooleanBufferBuilder::new(values_builder.len()),
+            bitmap_builder: BooleanBufferBuilder::new(capacity),
             values_builder,
             len: 0,
         }
@@ -592,12 +633,21 @@ pub struct FixedSizeListBuilder<T: ArrayBuilder> {
 }
 
 impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
-    /// Creates a new `ListArrayBuilder` from a given values array builder
+    /// Creates a new `FixedSizeListBuilder` from a given values array builder
+    /// `length` is the number of values within each array
     pub fn new(values_builder: T, length: i32) -> Self {
-        let mut offsets_builder = Int32BufferBuilder::new(values_builder.len() + 1);
+        let capacity = values_builder.len();
+        Self::with_capacity(values_builder, length, capacity)
+    }
+
+    /// Creates a new `FixedSizeListBuilder` from a given values array builder
+    /// `length` is the number of values within each array
+    /// `capacity` is the number of items to pre-allocate space for in this builder
+    pub fn with_capacity(values_builder: T, length: i32, capacity: usize) -> Self {
+        let mut offsets_builder = Int32BufferBuilder::new(capacity + 1);
         offsets_builder.append(0).unwrap();
         Self {
-            bitmap_builder: BooleanBufferBuilder::new(values_builder.len()),
+            bitmap_builder: BooleanBufferBuilder::new(capacity),
             values_builder,
             len: 0,
             list_len: length,
@@ -839,12 +889,22 @@ impl BinaryBuilder {
 }
 
 impl StringBuilder {
-    /// Creates a new `StringBuilder`, `capacity` is the number of bytes in the values
-    /// array
+    /// Creates a new `StringBuilder`,
+    /// `capacity` is the number of bytes of string data to pre-allocate space for in this builder
     pub fn new(capacity: usize) -> Self {
         let values_builder = UInt8Builder::new(capacity);
         Self {
             builder: ListBuilder::new(values_builder),
+        }
+    }
+
+    /// Creates a new `StringBuilder`,
+    /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
+    /// `item_capacity` is the number of items to pre-allocate space for in this builder
+    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        let values_builder = UInt8Builder::new(data_capacity);
+        Self {
+            builder: ListBuilder::with_capacity(values_builder, item_capacity),
         }
     }
 
@@ -1065,7 +1125,7 @@ impl StructBuilder {
                 let schema = Schema::new(fields.clone());
                 Box::new(Self::from_schema(schema, capacity))
             }
-            t @ _ => panic!("Data type {:?} is not currently supported", t),
+            t => panic!("Data type {:?} is not currently supported", t),
         }
     }
 
@@ -1151,8 +1211,8 @@ where
         values_builder: PrimitiveBuilder<V>,
     ) -> Self {
         Self {
-            keys_builder: keys_builder,
-            values_builder: values_builder,
+            keys_builder,
+            values_builder,
             map: HashMap::new(),
         }
     }

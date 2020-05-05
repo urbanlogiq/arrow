@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This API is EXPERIMENTAL.
+
 #pragma once
 
 #include <memory>
@@ -65,7 +67,7 @@ class ARROW_DS_EXPORT ScanOptions {
   std::shared_ptr<ScanOptions> ReplaceSchema(std::shared_ptr<Schema> schema) const;
 
   // Filter
-  std::shared_ptr<Expression> filter;
+  std::shared_ptr<Expression> filter = scalar(true);
 
   // Evaluator for Filter
   std::shared_ptr<ExpressionEvaluator> evaluator;
@@ -143,13 +145,12 @@ ARROW_DS_EXPORT Result<ScanTaskIterator> ScanTaskIteratorFromRecordBatch(
 
 /// \brief Scanner is a materialized scan operation with context and options
 /// bound. A scanner is the class that glues ScanTask, Fragment,
-/// and Source. In python pseudo code, it performs the following:
+/// and Dataset. In python pseudo code, it performs the following:
 ///
 ///  def Scan():
-///    for source in this.sources_:
-///      for fragment in source.GetFragments(this.options_):
-///        for scan_task in fragment.Scan(this.context_):
-///          yield scan_task
+///    for fragment in self.dataset.GetFragments(this.options.filter):
+///      for scan_task in fragment.Scan(this.options):
+///        yield scan_task
 class ARROW_DS_EXPORT Scanner {
  public:
   Scanner(std::shared_ptr<Dataset> dataset, std::shared_ptr<ScanOptions> scan_options,
@@ -158,9 +159,10 @@ class ARROW_DS_EXPORT Scanner {
         scan_options_(std::move(scan_options)),
         scan_context_(std::move(scan_context)) {}
 
-  Scanner(std::shared_ptr<Fragment> fragment, std::shared_ptr<ScanContext> scan_context)
+  Scanner(std::shared_ptr<Fragment> fragment, std::shared_ptr<ScanOptions> scan_options,
+          std::shared_ptr<ScanContext> scan_context)
       : fragment_(std::move(fragment)),
-        scan_options_(fragment_->scan_options()),
+        scan_options_(std::move(scan_options)),
         scan_context_(std::move(scan_context)) {}
 
   /// \brief The Scan operator returns a stream of ScanTask. The caller is
@@ -197,6 +199,9 @@ class ARROW_DS_EXPORT Scanner {
 class ARROW_DS_EXPORT ScannerBuilder {
  public:
   ScannerBuilder(std::shared_ptr<Dataset> dataset,
+                 std::shared_ptr<ScanContext> scan_context);
+
+  ScannerBuilder(std::shared_ptr<Schema> schema, std::shared_ptr<Fragment> fragment,
                  std::shared_ptr<ScanContext> scan_context);
 
   /// \brief Set the subset of columns to materialize.
@@ -240,10 +245,11 @@ class ARROW_DS_EXPORT ScannerBuilder {
   /// \brief Return the constructed now-immutable Scanner object
   Result<std::shared_ptr<Scanner>> Finish() const;
 
-  std::shared_ptr<Schema> schema() const { return dataset_->schema(); }
+  std::shared_ptr<Schema> schema() const { return scan_options_->schema(); }
 
  private:
   std::shared_ptr<Dataset> dataset_;
+  std::shared_ptr<Fragment> fragment_;
   std::shared_ptr<ScanOptions> scan_options_;
   std::shared_ptr<ScanContext> scan_context_;
   bool has_projection_ = false;

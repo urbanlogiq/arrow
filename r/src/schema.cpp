@@ -85,7 +85,7 @@ std::shared_ptr<arrow::Schema> Schema__WithMetadata(
 Rcpp::RawVector Schema__serialize(const std::shared_ptr<arrow::Schema>& schema) {
   arrow::ipc::DictionaryMemo empty_memo;
   std::shared_ptr<arrow::Buffer> out =
-      VALUE_OR_STOP(arrow::ipc::SerializeSchema(*schema, &empty_memo));
+      ValueOrStop(arrow::ipc::SerializeSchema(*schema, &empty_memo));
 
   auto n = out->size();
   Rcpp::RawVector vec(out->size());
@@ -98,6 +98,12 @@ Rcpp::RawVector Schema__serialize(const std::shared_ptr<arrow::Schema>& schema) 
 bool Schema__Equals(const std::shared_ptr<arrow::Schema>& schema,
                     const std::shared_ptr<arrow::Schema>& other, bool check_metadata) {
   return schema->Equals(*other, check_metadata);
+}
+
+// [[arrow::export]]
+std::shared_ptr<arrow::Schema> arrow__UnifySchemas(
+    const std::vector<std::shared_ptr<arrow::Schema>>& schemas) {
+  return ValueOrStop(arrow::UnifySchemas(schemas));
 }
 
 #endif

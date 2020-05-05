@@ -37,8 +37,8 @@
 #include "arrow/util/key_value_metadata.h"
 #include "arrow/util/logging.h"
 #include "arrow/util/macros.h"
-#include "arrow/util/parsing.h"
 #include "arrow/util/string_view.h"
+#include "arrow/util/value_parsing.h"
 #include "arrow/visitor_inline.h"
 
 namespace arrow {
@@ -714,7 +714,7 @@ Result<std::shared_ptr<KeyValueMetadata>> DecodeMetadata(const char* metadata) {
     int32_t v;
     memcpy(&v, metadata, 4);
     metadata += 4;
-    *out = BitUtil::FromLittleEndian(v);
+    *out = v;
     if (*out < 0) {
       return Status::Invalid("Invalid encoded metadata string");
     }

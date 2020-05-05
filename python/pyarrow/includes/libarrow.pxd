@@ -411,6 +411,9 @@ cdef extern from "arrow/api.h" namespace "arrow" nogil:
             const shared_ptr[CKeyValueMetadata]& metadata)
         shared_ptr[CSchema] RemoveMetadata()
 
+    CResult[shared_ptr[CSchema]] UnifySchemas(
+        const vector[shared_ptr[CSchema]]& schemas)
+
     cdef cppclass PrettyPrintOptions:
         PrettyPrintOptions()
         PrettyPrintOptions(int indent_arg)
@@ -564,8 +567,10 @@ cdef extern from "arrow/api.h" namespace "arrow" nogil:
             const vector[c_string]& field_names,
             const vector[int8_t]& type_codes)
 
+        shared_ptr[CBuffer] type_codes()
         int8_t* raw_type_codes()
         int32_t value_offset(int i)
+        shared_ptr[CBuffer] value_offsets()
         int child_id(int64_t index)
         shared_ptr[CArray] child(int pos)
         const CArray* UnsafeChild(int pos)
@@ -1407,6 +1412,13 @@ cdef extern from "arrow/csv/api.h" namespace "arrow::csv" nogil:
 
         CResult[shared_ptr[CTable]] Read()
 
+    cdef cppclass CCSVStreamingReader" arrow::csv::StreamingReader"(
+            CRecordBatchReader):
+        @staticmethod
+        CResult[shared_ptr[CCSVStreamingReader]] Make(
+            CMemoryPool*, shared_ptr[CInputStream],
+            CCSVReadOptions, CCSVParseOptions, CCSVConvertOptions)
+
 
 cdef extern from "arrow/json/options.h" nogil:
 
@@ -1518,9 +1530,15 @@ cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
     CStatus Take(CFunctionContext* context, const CDatum& values,
                  const CDatum& indices, const CTakeOptions& options,
                  CDatum* out)
+    CStatus Take(CFunctionContext* context, const CChunkedArray& values,
+                 const CArray& indices, const CTakeOptions& options,
+                 shared_ptr[CChunkedArray]* out)
     CStatus Take(CFunctionContext* context, const CRecordBatch& batch,
                  const CArray& indices, const CTakeOptions& options,
                  shared_ptr[CRecordBatch]* out)
+    CStatus Take(CFunctionContext* context, const CTable& table,
+                 const CArray& indices, const CTakeOptions& options,
+                 shared_ptr[CTable]* out)
 
     # Filter clashes with gandiva.pyx::Filter
     CStatus FilterKernel" arrow::compute::Filter"(
@@ -1708,6 +1726,7 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py" nogil:
         int csr
         int csc
         int csf
+        int ndim_csf
         int num_total_tensors() const
         int num_total_buffers() const
 
@@ -1724,10 +1743,8 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py::internal" nogil:
     cdef cppclass CTimePoint "arrow::py::internal::TimePoint":
         pass
 
-    CStatus PyDateTime_from_int(int64_t val, const TimeUnit unit,
-                                PyObject** out)
-    CStatus PyDateTime_from_TimePoint(CTimePoint val, PyObject** out)
     CTimePoint PyDateTime_to_TimePoint(PyDateTime_DateTime* pydatetime)
+    int64_t TimePoint_to_ns(CTimePoint val)
 
 
 cdef extern from 'arrow/python/init.h':
@@ -1828,6 +1845,12 @@ cdef extern from 'arrow/util/iterator.h' namespace 'arrow' nogil:
     cdef cppclass CIterator" arrow::Iterator"[T]:
         CResult[T] Next()
         CStatus Visit[Visitor](Visitor&& visitor)
+        cppclass RangeIterator:
+            CResult[T] operator*()
+            RangeIterator& operator++()
+            bint operator!=(RangeIterator) const
+        RangeIterator begin()
+        RangeIterator end()
 
 cdef extern from 'arrow/util/thread_pool.h' namespace 'arrow' nogil:
     int GetCpuThreadPoolCapacity()

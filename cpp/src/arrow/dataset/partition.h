@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This API is EXPERIMENTAL.
+
 #pragma once
 
 #include <functional>
@@ -104,10 +106,12 @@ class ARROW_DS_EXPORT PartitioningFactory {
 
   // FIXME(bkietz) Make these pure virtual
   /// Construct a WritePlan for the provided fragments
-  virtual Result<WritePlan> MakeWritePlan(FragmentIterator fragments,
-                                          const std::shared_ptr<Schema>& schema);
+  virtual Result<WritePlan> MakeWritePlan(std::shared_ptr<Schema> schema,
+                                          FragmentIterator fragments,
+                                          std::shared_ptr<Schema> partition_schema);
   /// Construct a WritePlan for the provided fragments, inferring schema
-  virtual Result<WritePlan> MakeWritePlan(FragmentIterator fragments);
+  virtual Result<WritePlan> MakeWritePlan(std::shared_ptr<Schema> schema,
+                                          FragmentIterator fragments);
 };
 
 /// \brief Subclass for representing the default, a partitioning that returns
