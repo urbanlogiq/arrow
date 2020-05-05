@@ -25,7 +25,7 @@ use std::thread;
 use crate::error::{ExecutionError, Result};
 use crate::execution::physical_plan::common;
 use crate::execution::physical_plan::{BatchIterator, ExecutionPlan, Partition};
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use parquet::file::reader::SerializedFileReader;
 
@@ -73,10 +73,55 @@ impl ParquetExec {
                     .collect(),
             );
 
+            // The projection argument specifies the indices of the top-level fields included.
+            // Because struct-type fields contain multiple columns, the projection cannot be directly mapped to parquet columns.
+            // We need to build a projection that includes the indices of all columns associated with any struct-type fields included in the original projection.
+            let mut column_projection = Vec::new();
+
+            // We have to go through every field in order to map the projected indices of the fields with the true column indices of the parquet.
+            // For example, assume the following parquet "businesses":
+            // +---------------------------------+---------------------------------+
+            // |             employees          |             sector               |
+            // +---------------------------------+---------------------------------+
+            // | {part_time: 10, full_time: 54} |            restaurant            |
+            // | {part_time: 5, full_time: 40}  |            retail                |
+            // +---------------------------------+---------------------------------+
+            // If the following query is issued: SELECT sector FROM businesses;
+            // then the projection argument sent to this function will be [1].
+            // However, due to the fact that the first field in the parquet actually contains 2 columns,
+            // the projection should actually be [2].
+            // At the same time, we must maintain the original projected schema.
+            // This is so that we can reassemble each group of columns associated with a struct back into a structarray at the end.
+
+            let mut current_pq_col_idx = 0; // keeps track of the current parquet column (including columns contained within struct fields)
+            for (i, field) in schema.fields().iter().enumerate() {
+                match field.data_type() {
+                    DataType::Struct(inner_fields) => {
+                        if projection.contains(&i) {
+                            // every column within the struct must be added to the projection
+                            column_projection.extend(
+                                (current_pq_col_idx
+                                    ..(current_pq_col_idx + inner_fields.len()))
+                                    .into_iter(),
+                            );
+                        }
+                        // current column index increments for each column in struct
+                        current_pq_col_idx = current_pq_col_idx + inner_fields.len();
+                    }
+                    _ => {
+                        if projection.contains(&i) {
+                            // add true column index to projection
+                            column_projection.push(current_pq_col_idx); // non-struct fields do have a 1:1 mapping with a parquet column
+                        }
+                        current_pq_col_idx = current_pq_col_idx + 1;
+                    }
+                }
+            }
+
             Ok(Self {
                 filenames,
                 schema: Arc::new(projected_schema),
-                projection,
+                projection: column_projection,
                 batch_size,
             })
         }

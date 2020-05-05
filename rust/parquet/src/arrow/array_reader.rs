@@ -1131,7 +1131,6 @@ where
     let mut base_nodes = Vec::new();
     let mut base_nodes_set = HashSet::new();
     let mut leaves = HashMap::<*const Type, usize>::new();
-
     for c in column_indices {
         let column = parquet_schema.column(c).self_type() as *const Type;
         let root = parquet_schema.get_column_root_ptr(c);
@@ -1195,6 +1194,7 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         if self.is_included(cur_type.as_ref()) {
             let mut new_context = context.clone();
+
             if cur_type.name().to_string() != "item" {
                 new_context.path.append(vec![cur_type.name().to_string()]);
             }
@@ -1230,7 +1230,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     ) -> Result<Option<Box<ArrayReader>>> {
         let mut new_context = context.clone();
         new_context.path.append(vec![cur_type.name().to_string()]);
-
         if cur_type.get_basic_info().has_repetition() {
             match cur_type.get_basic_info().repetition() {
                 Repetition::REPEATED => {
@@ -1272,7 +1271,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     }
 
     /// Build array reader for list type.
-    /// List type is a special case of struct type (see https://github.com/apache/parquet-format/blob/master/LogicalTypes.md)
     fn visit_list_with_item(
         &mut self,
         list_type: Rc<Type>,
@@ -1443,7 +1441,6 @@ impl<'a> ArrayReaderBuilder {
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let mut fields = Vec::with_capacity(cur_type.get_fields().len());
         let mut children_reader = Vec::with_capacity(cur_type.get_fields().len());
-
         for child in cur_type.get_fields() {
             if let Some(child_reader) = self.dispatch(child.clone(), context)? {
                 fields.push(Field::new(
