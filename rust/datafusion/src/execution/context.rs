@@ -299,66 +299,9 @@ impl ExecutionContext {
             LogicalPlan::Projection { input, expr, .. } => {
                 let input = self.create_physical_plan(input, batch_size)?;
                 let input_schema = input.as_ref().schema().clone();
-
-                // Each non-struct top-level field is uniquely associated with a column in the parquet,
-                // however struct fields contain multiple parquet columns, one for each of their attributes.
-                // For datafusion's SQL querying purposes, all columns from the same field are queried as a single column.
-                // For example, assume the following parquet "businesses":
-                // +---------------------------------+---------------------------------+
-                // |             employees          |             sector               |
-                // +---------------------------------+---------------------------------+
-                // | {part_time: 10, full_time: 54} |            restaurant            |
-                // | {part_time: 5, full_time: 40}  |            retail                |
-                // +---------------------------------+---------------------------------+
-                // This parquet has 3 primitive columns: "part_time", "full_time", and "sector".
-
-                // When the query "SELECT employees, sector FROM businesses;" is issued,
-                // the projection will refer to the top-level fields i.e. expr = vec![Expr::Column(0), Expr::Column(1)].
-                // In order to visit each of the parquet columns associated with the top-level struct columns, we need
-                // to interprete this projection over 2 columns ("employees" and "sector") as actually being a projection over 3 columns:
-                // "part_time", "full_time", and "sector".
-
-                // we need to collect projection expressions for each of the inner fields of stuct columns and the outer fields of non-struct columns
-                let mut proj_expr = Vec::new(); // for the example, this will be of length 3: [Expr::Column(0), Expr::Column(1), Expr::Column(2)]
-
-                // we need to collect together the inner fields of stuct columns and the outer fields of non-struct columns
-                let mut fields = Vec::new(); // for the example, this will be of length 3: ["part_time" (int), "full_time" (int), "sector" (utf8)]
-
-                let mut current_pq_col_idx = 0; // index of the current PARQUET column being traversed. Will be incremented for each of part_time, full_time, and sector.
-                for e in expr.iter() {
-                    if let Expr::Column(top_level_idx) = e {
-                        let field = &input_schema.field(*top_level_idx);
-                        match field.data_type() {
-                            DataType::Struct(inner_fields) => {
-                                for inner_field in inner_fields.iter() {
-                                    fields.push(inner_field.clone());
-                                }
-                                // add projection expressions for the each of the contained columns of each struct field in the original projection
-                                let field_start_idx = current_pq_col_idx; // column index in the parquet of the first column belonging to the Struct
-                                for idx in (field_start_idx
-                                    ..(field_start_idx + inner_fields.len()))
-                                    .into_iter()
-                                {
-                                    proj_expr.push(Expr::Column(idx));
-                                    current_pq_col_idx = current_pq_col_idx + 1;
-                                }
-                            }
-                            _ => {
-                                // the projection expression for non-struct fields will be unchanged
-                                fields.push(field.clone().clone());
-                                proj_expr.push(e.clone());
-                                current_pq_col_idx = current_pq_col_idx + 1;
-                            }
-                        }
-                    } else {
-                        proj_expr.push(e.clone()); // leave non-projection expressions unchanged.
-                    }
-                }
-                // Define a new schema where the inner fields of each top-level struct field replace that struct field. Non-struct fields will be unchanged in the schema.
-                let schema = Schema::new(fields.clone()); // in the example, "full_time" and "part_time" will replace "employees" in the schema of the physical expression
-                let runtime_expr = proj_expr
+                let runtime_expr = expr
                     .iter()
-                    .map(|e| self.create_physical_expr(e, &schema))
+                    .map(|e| self.create_physical_expr(e, &input_schema))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Arc::new(ProjectionExec::try_new(runtime_expr, input)?))
             }

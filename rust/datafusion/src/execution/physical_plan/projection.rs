@@ -27,7 +27,7 @@ use crate::execution::physical_plan::{
     BatchIterator, ExecutionPlan, Partition, PhysicalExpr,
 };
 use arrow::array::{ArrayRef, StructArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 
 /// Execution plan for a projection
@@ -48,32 +48,9 @@ impl ProjectionExec {
     ) -> Result<Self> {
         let input_schema = input.schema();
 
-        // The columns contained within struct type fields will each have their own physical expr.
-        // However, these columns do not have a 1:1 relationship with top-level fields in the schema.
-        // In order to assign the correct column types for the projected columns,
-        // we must build and use for the projection a schema which contains primitive fields for each column contained in a struct field.
-        // The original input schema must be maintained so that the columns associated with each struct field can be zipped back up together into structarrays after the projection is performed
-        let mut column_fields = Vec::new();
-        for field in input_schema.fields() {
-            if let DataType::Struct(inner_fields) = field.data_type() {
-                for inner_field in inner_fields.iter() {
-                    column_fields.push(inner_field.clone());
-                }
-            } else {
-                column_fields.push(field.clone()); // non-struct fields have a 1:1 relationship with columns in the input schema
-            }
-        }
-
-        let projection_schema = Schema::new(column_fields);
         let fields: Result<Vec<_>> = expr
             .iter()
-            .map(|e| {
-                Ok(Field::new(
-                    &e.name(),
-                    e.data_type(&projection_schema)?,
-                    true,
-                ))
-            })
+            .map(|e| Ok(Field::new(&e.name(), e.data_type(&input_schema)?, true)))
             .collect();
 
         let schema = Arc::new(Schema::new(fields?));
@@ -149,48 +126,9 @@ impl BatchIterator for ProjectionIterator {
         let mut input = self.input.lock().unwrap();
         match input.next()? {
             Some(batch) => {
-                let arrays = self
-                    .expr
-                    .iter()
-                    .map(|expr| expr.evaluate(&batch))
-                    .collect::<Result<Vec<_>>>()?;
-
-                // For struct-type fields, each struct attribute has its own parquet column and gets evaluated individually.
-                // Now that we have evaluated our columns (see comments in evaluate in impl PhysicalExpr for Column)
-                // we have to put the columns that belong to structs back together into StructArrays so that the correct schema is returned.
-
-                let mut column_arrays = Vec::new(); // Final columns to be returned from the SQL query. One column per top-level field in the parquet schema.
-                let mut array_idx = 0; // We need to keep track of the current index within the evaluated arrays as we traverse the evaluated arrays.
-                for field in batch.schema().fields().iter() {
-                    match field.data_type() {
-                        DataType::Struct(inner_fields) => {
-                            // For each struct-type top level field in the batch schema, we need to collect all contained arrays
-                            let mut field_array_pairs = Vec::new();
-                            for inner_field in inner_fields.iter() {
-                                field_array_pairs.push((
-                                    // every column associated with this struct field will be combined into a StructArray
-                                    inner_field.clone(),
-                                    arrays[array_idx].clone(),
-                                ));
-                                array_idx = array_idx + 1;
-                            }
-                            let struct_array =
-                                Arc::new(StructArray::from(field_array_pairs))
-                                    as ArrayRef;
-                            column_arrays.push(struct_array); // The final returned column is a StructArray
-                        }
-                        _ => {
-                            // Each non-struct top level field is 1:1 associated with an evaluated array
-                            column_arrays.push(arrays[array_idx].clone());
-                            array_idx = array_idx + 1;
-                        }
-                    }
-                }
-
-                Ok(Some(RecordBatch::try_new(
-                    batch.schema().clone(),
-                    column_arrays,
-                )?))
+                let arrays: Result<Vec<_>> =
+                    self.expr.iter().map(|expr| expr.evaluate(&batch)).collect();
+                Ok(Some(RecordBatch::try_new(self.schema.clone(), arrays?)?))
             }
             None => Ok(None),
         }
