@@ -511,9 +511,9 @@ mod tests {
     use super::*;
     use crate::array::Int32Array;
     use crate::buffer::Buffer;
+    use crate::datatypes::Int8Type;
     use crate::datatypes::ToByteSlice;
     use std::convert::TryFrom;
-    use crate::datatypes::Int8Type;
 
     #[test]
     fn test_primitive_array_eq() {
