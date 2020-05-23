@@ -128,11 +128,12 @@ impl<T: DataType> PrimitiveArrayReader<T> {
             .clone();
 
         let mut record_reader = RecordReader::<T>::new(column_desc.clone());
-        record_reader.set_page_reader(
-            pages
-                .next()
-                .ok_or_else(|| general_err!("Can't build array without pages!"))??,
-        )?;
+        match pages.next() {
+            Some(page_reader) => {
+                record_reader.set_page_reader(page_reader?)?;
+            }
+            None => {}
+        }
 
         Ok(Self {
             data_type,
@@ -164,6 +165,9 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
             let records_to_read = batch_size - records_read;
 
             let records_read_once = self.record_reader.read_records(records_to_read)?;
+            if records_read_once == 0 {
+                break; // record reader has no record
+            }
             records_read = records_read + records_read_once;
             // Record reader exhausted
             if records_read_once < records_to_read {
@@ -1084,21 +1088,28 @@ where
     T: IntoIterator<Item = usize>,
 {
     let mut leaves = HashMap::<*const Type, usize>::new();
+
+    let mut filtered_fields: Vec<Rc<Type>> = Vec::new();
+
     for c in column_indices {
         let column = parquet_schema.column(c).self_type() as *const Type;
         leaves.insert(column, c);
+
+        let root = parquet_schema.get_column_root_ptr(c);
+        filtered_fields.push(root);
     }
 
     if leaves.is_empty() {
         return Err(general_err!("Can't build array reader without columns!"));
     }
 
-    ArrayReaderBuilder::new(
-        Rc::new(parquet_schema.root_schema().clone()),
-        Rc::new(leaves),
-        file_reader,
-    )
-    .build_array_reader()
+    let proj = Type::GroupType {
+        basic_info: parquet_schema.root_schema().get_basic_info().clone(),
+        fields: filtered_fields,
+    };
+
+    ArrayReaderBuilder::new(Rc::new(proj), Rc::new(leaves), file_reader)
+        .build_array_reader()
 }
 
 /// Used to build array reader.

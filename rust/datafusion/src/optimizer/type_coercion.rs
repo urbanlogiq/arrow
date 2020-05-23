@@ -21,7 +21,6 @@
 //! float)`. This keeps the runtime query execution code much simpler.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
@@ -62,9 +61,9 @@ impl<'a> TypeCoercionRule<'a> {
                 let right_type = right.get_type(schema)?;
                 if left_type == right_type {
                     Ok(Expr::BinaryExpr {
-                        left: Arc::new(left),
+                        left: Box::new(left),
                         op: op.clone(),
-                        right: Arc::new(right),
+                        right: Box::new(right),
                     })
                 } else {
                     match op {
@@ -87,9 +86,9 @@ impl<'a> TypeCoercionRule<'a> {
                     };
                 }
             }
-            Expr::IsNull(e) => Ok(Expr::IsNull(Arc::new(self.rewrite_expr(e, schema)?))),
+            Expr::IsNull(e) => Ok(Expr::IsNull(Box::new(self.rewrite_expr(e, schema)?))),
             Expr::IsNotNull(e) => {
-                Ok(Expr::IsNotNull(Arc::new(self.rewrite_expr(e, schema)?)))
+                Ok(Expr::IsNotNull(Box::new(self.rewrite_expr(e, schema)?)))
             }
             Expr::ScalarFunction {
                 name,
@@ -141,7 +140,7 @@ impl<'a> TypeCoercionRule<'a> {
             Expr::Cast { .. } => Ok(expr.clone()),
             Expr::Column(_) => Ok(expr.clone()),
             Expr::Alias(expr, alias) => Ok(Expr::Alias(
-                Arc::new(self.rewrite_expr(expr, schema)?),
+                Box::new(self.rewrite_expr(expr, schema)?),
                 alias.to_owned(),
             )),
             Expr::Literal(_) => Ok(expr.clone()),
@@ -262,9 +261,9 @@ mod tests {
         ]);
 
         let expr = Expr::BinaryExpr {
-            left: Arc::new(Column(0)),
+            left: Box::new(Column(0)),
             op: Operator::Plus,
-            right: Arc::new(Column(1)),
+            right: Box::new(Column(1)),
         };
 
         let ctx = ExecutionContext::new();

@@ -212,6 +212,10 @@ where
     T: ArrowNumericType,
     F: Fn(T::Simd, T::Simd) -> T::SimdMask,
 {
+    use crate::buffer::MutableBuffer;
+    use std::io::Write;
+    use std::mem;
+
     let len = left.len();
     if len != right.len() {
         return Err(ArrowError::ComputeError(
@@ -227,7 +231,7 @@ where
     )?;
 
     let lanes = T::lanes();
-    let mut result = BooleanBufferBuilder::new(len);
+    let mut result = MutableBuffer::new(left.len() * mem::size_of::<bool>());
 
     let rem = len % lanes;
 
@@ -235,18 +239,19 @@ where
         let simd_left = T::load(left.value_slice(i, lanes));
         let simd_right = T::load(right.value_slice(i, lanes));
         let simd_result = op(simd_left, simd_right);
-        for i in 0..lanes {
-            result.append(T::mask_get(&simd_result, i))?;
-        }
+        T::bitmask(&simd_result, |b| {
+            result.write(b).unwrap();
+        });
     }
 
     if rem > 0 {
         let simd_left = T::load(left.value_slice(len - rem, lanes));
         let simd_right = T::load(right.value_slice(len - rem, lanes));
         let simd_result = op(simd_left, simd_right);
-        for i in 0..rem {
-            result.append(T::mask_get(&simd_result, i))?;
-        }
+        let rem_buffer_size = (rem as f32 / 8f32).ceil() as usize;
+        T::bitmask(&simd_result, |b| {
+            result.write(&b[0..rem_buffer_size]).unwrap();
+        });
     }
 
     let data = ArrayData::new(
@@ -255,7 +260,7 @@ where
         None,
         null_bit_buffer,
         left.offset(),
-        vec![result.finish()],
+        vec![result.freeze()],
         vec![],
     );
     Ok(PrimitiveArray::<BooleanType>::from(Arc::new(data)))
