@@ -69,18 +69,18 @@ impl<'a> TypeCoercionRule<'a> {
                     match op {
                         Operator::Contains => {
                             return Ok(Expr::BinaryExpr {
-                                left: Arc::new(left.cast_to(&left_type, schema)?),
+                                left: Box::new(left.cast_to(&left_type, schema)?),
                                 op: op.clone(),
-                                right: Arc::new(right.cast_to(&right_type, schema)?),
+                                right: Box::new(right.cast_to(&right_type, schema)?),
                             });
                         }
                         _ => {
                             let super_type =
                                 utils::get_supertype(&left_type, &right_type)?;
                             return Ok(Expr::BinaryExpr {
-                                left: Arc::new(left.cast_to(&super_type, schema)?),
+                                left: Box::new(left.cast_to(&super_type, schema)?),
                                 op: op.clone(),
-                                right: Arc::new(right.cast_to(&super_type, schema)?),
+                                right: Box::new(right.cast_to(&super_type, schema)?),
                             });
                         }
                     };
