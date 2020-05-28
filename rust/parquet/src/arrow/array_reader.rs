@@ -16,7 +16,7 @@
 // under the License.
 
 use std::cmp::{max, min};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::rc::Rc;
@@ -1089,60 +1089,38 @@ where
 {
     let mut leaves = HashMap::<*const Type, usize>::new();
 
-    for c in column_indices {
-        let column = parquet_schema.column(c).self_type() as *const Type;
-        leaves.insert(column, c);
-    }
-
-    if leaves.is_empty() {
-        return Err(general_err!("Can't build array reader without columns!"));
-    }
-
-    ArrayReaderBuilder::new(
-        Rc::new(parquet_schema.root_schema().clone()),
-        Rc::new(leaves),
-        file_reader
-    )
-    .build_array_reader()
-
-    /*
-     * TODO: mburke - this is the verbatim section from Arrow/Parquet head
-     * which I've commented out and replaced with the previous iteration.
-     * The issue is that this change, (related to PR6935/ARROW-8455) attempts
-     * to solve is reading files where there is no support for reading particular
-     * column types.
-     *
-     * But in our case it causes the number of FDs in use to balloon greatly and
-     * our service processes die when we exhaust them.
-     *
-     * The original implementation still has an FD issue (because the
-     * SerializedRowGroupReader and SerializedPageReader each consume a cloned FD).
-     *
-     * blargh.
-    let mut leaves = HashMap::<*const Type, usize>::new();
-
-    let mut filtered_fields: Vec<Rc<Type>> = Vec::new();
+    let mut filtered_root_names = HashSet::<String>::new();
 
     for c in column_indices {
         let column = parquet_schema.column(c).self_type() as *const Type;
         leaves.insert(column, c);
 
         let root = parquet_schema.get_column_root_ptr(c);
-        filtered_fields.push(root);
+        filtered_root_names.insert(root.name().to_string());
     }
 
     if leaves.is_empty() {
         return Err(general_err!("Can't build array reader without columns!"));
     }
 
+    // Only pass root fields that take part in the projection
+    // to avoid traversal of columns that are not read.
+    // TODO: also prune unread parts of the tree in child structures
+    let filtered_root_fields = parquet_schema
+        .root_schema()
+        .get_fields()
+        .into_iter()
+        .filter(|field| filtered_root_names.contains(field.name()))
+        .map(|field| field.clone())
+        .collect::<Vec<_>>();
+
     let proj = Type::GroupType {
         basic_info: parquet_schema.root_schema().get_basic_info().clone(),
-        fields: filtered_fields,
+        fields: filtered_root_fields,
     };
 
     ArrayReaderBuilder::new(Rc::new(proj), Rc::new(leaves), file_reader)
         .build_array_reader()
-     */
 }
 
 /// Used to build array reader.
