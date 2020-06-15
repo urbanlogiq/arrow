@@ -24,7 +24,8 @@
 #include "arrow/testing/gtest_util.h"
 #include "arrow/testing/random.h"
 
-#include "arrow/array.h"
+#include "arrow/array/array_base.h"
+#include "arrow/array/data.h"
 #include "arrow/buffer.h"
 #include "arrow/compute/exec.h"
 #include "arrow/compute/exec_internal.h"
@@ -37,6 +38,7 @@
 #include "arrow/table.h"
 #include "arrow/type.h"
 #include "arrow/util/bit_util.h"
+#include "arrow/util/bitmap_ops.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/cpu_info.h"
 #include "arrow/util/logging.h"
@@ -559,6 +561,7 @@ void ExecComputedBitmap(KernelContext* ctx, const ExecBatch& batch, Datum* out) 
                                    out_arr->buffers[0]->data(), out_arr->offset,
                                    batch.length));
   }
+
   internal::CopyBitmap(arg0.buffers[0]->data(), arg0.offset, batch.length,
                        out_arr->buffers[0]->mutable_data(), out_arr->offset);
   ExecCopy(ctx, batch, out);
@@ -645,7 +648,7 @@ class TestCallScalarFunction : public TestComputeInternals {
 
     // This function simply copies memory from the input argument into the
     // (preallocated) output
-    auto func = std::make_shared<ScalarFunction>("test_copy", 1);
+    auto func = std::make_shared<ScalarFunction>("test_copy", Arity::Unary());
 
     // Add a few kernels. Our implementation only accepts arrays
     ASSERT_OK(func->AddKernel({InputType::Array(uint8())}, uint8(), ExecCopy));
@@ -654,7 +657,8 @@ class TestCallScalarFunction : public TestComputeInternals {
     ASSERT_OK(registry->AddFunction(func));
 
     // A version which doesn't want the executor to call PropagateNulls
-    auto func2 = std::make_shared<ScalarFunction>("test_copy_computed_bitmap", 1);
+    auto func2 =
+        std::make_shared<ScalarFunction>("test_copy_computed_bitmap", Arity::Unary());
     ScalarKernel kernel({InputType::Array(uint8())}, uint8(), ExecComputedBitmap);
     kernel.null_handling = NullHandling::COMPUTED_PREALLOCATE;
     ASSERT_OK(func2->AddKernel(kernel));
@@ -666,8 +670,9 @@ class TestCallScalarFunction : public TestComputeInternals {
 
     // A function that allocates its own output memory. We have cases for both
     // non-preallocated data and non-preallocated validity bitmap
-    auto f1 = std::make_shared<ScalarFunction>("test_nopre_data", 1);
-    auto f2 = std::make_shared<ScalarFunction>("test_nopre_validity_or_data", 1);
+    auto f1 = std::make_shared<ScalarFunction>("test_nopre_data", Arity::Unary());
+    auto f2 =
+        std::make_shared<ScalarFunction>("test_nopre_validity_or_data", Arity::Unary());
 
     ScalarKernel kernel({InputType::Array(uint8())}, uint8(), ExecNoPreallocatedData);
     kernel.mem_allocation = MemAllocation::NO_PREALLOCATE;
@@ -686,7 +691,7 @@ class TestCallScalarFunction : public TestComputeInternals {
 
     // This function's behavior depends on a static parameter that is made
     // available to the kernel's execution function through its Options object
-    auto func = std::make_shared<ScalarFunction>("test_stateful", 1);
+    auto func = std::make_shared<ScalarFunction>("test_stateful", Arity::Unary());
 
     ScalarKernel kernel({InputType::Array(int32())}, int32(), ExecStateful, InitStateful);
     ASSERT_OK(func->AddKernel(kernel));
@@ -696,7 +701,8 @@ class TestCallScalarFunction : public TestComputeInternals {
   void AddScalarFunction() {
     auto registry = GetFunctionRegistry();
 
-    auto func = std::make_shared<ScalarFunction>("test_scalar_add_int32", 2);
+    auto func =
+        std::make_shared<ScalarFunction>("test_scalar_add_int32", Arity::Binary());
     ASSERT_OK(func->AddKernel({InputType::Scalar(int32()), InputType::Scalar(int32())},
                               int32(), ExecAddInt32));
     ASSERT_OK(registry->AddFunction(func));
@@ -747,10 +753,8 @@ TEST_F(TestCallScalarFunction, PreallocationCases) {
       AssertArraysEqual(*arr, *result.make_array());
     }
 
-    exec_ctx_->set_exec_chunksize(12);
-
-    // Chunksize not multiple of 8
     {
+      // Chunksize not multiple of 8
       std::vector<Datum> args = {Datum(arr)};
       exec_ctx_->set_exec_chunksize(111);
       ASSERT_OK_AND_ASSIGN(Datum result, CallFunction(func_name, args, exec_ctx_.get()));

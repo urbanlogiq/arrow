@@ -15,10 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <array>
+
 #include "arrow/compute/kernels/common.h"
 #include "arrow/util/bit_util.h"
+#include "arrow/util/bitmap.h"
+#include "arrow/util/bitmap_ops.h"
 
 namespace arrow {
+
+using internal::Bitmap;
+
 namespace compute {
 
 namespace {
@@ -149,7 +156,7 @@ struct Xor {
 void MakeFunction(std::string name, int arity, ArrayKernelExec exec,
                   FunctionRegistry* registry, bool can_write_into_slices = true,
                   NullHandling::type null_handling = NullHandling::INTERSECTION) {
-  auto func = std::make_shared<ScalarFunction>(name, arity);
+  auto func = std::make_shared<ScalarFunction>(name, Arity(arity));
 
   // Scalar arguments not yet supported
   std::vector<InputType> in_types(arity, InputType::Array(boolean()));

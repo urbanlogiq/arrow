@@ -24,12 +24,16 @@
 #include <utility>
 #include <vector>
 
-#include "arrow/array.h"
+#include "arrow/array/array_base.h"
+#include "arrow/array/array_primitive.h"
+#include "arrow/array/data.h"
+#include "arrow/array/util.h"
 #include "arrow/buffer.h"
 #include "arrow/compute/exec_internal.h"
 #include "arrow/compute/function.h"
 #include "arrow/compute/kernel.h"
 #include "arrow/compute/registry.h"
+#include "arrow/compute/util_internal.h"
 #include "arrow/datum.h"
 #include "arrow/scalar.h"
 #include "arrow/status.h"
@@ -37,6 +41,7 @@
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/bit_util.h"
+#include "arrow/util/bitmap_ops.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/cpu_info.h"
 #include "arrow/util/logging.h"
@@ -47,8 +52,6 @@ using internal::BitmapAnd;
 using internal::checked_cast;
 using internal::CopyBitmap;
 using internal::CpuInfo;
-
-class MemoryPool;
 
 namespace compute {
 
@@ -495,6 +498,13 @@ class FunctionExecutorImpl : public FunctionExecutor {
 
     if (validity_preallocated_) {
       ARROW_ASSIGN_OR_RAISE(out->buffers[0], kernel_ctx_.AllocateBitmap(length));
+#ifdef ARROW_VALGRIND
+      // ARROW-8976: When writing kernel results chunkwise into larger
+      // preallocations, if the exec_chunksize is not a multiple of 8, then
+      // functions in NullPropagator will access bits that have not yet been
+      // intialized, triggering benign valgrind warnings.
+      internal::ZeroMemory(out->buffers[0].get());
+#endif
     }
     if (data_preallocated_) {
       const auto& fw_type = checked_cast<const FixedWidthType&>(*out->type);

@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from collections.abc import Iterable
 import datetime
 import decimal
 import hypothesis as h
@@ -33,7 +34,6 @@ except ImportError:
 
 import pyarrow as pa
 import pyarrow.tests.strategies as past
-from pyarrow import compat
 
 
 def test_total_bytes_allocated():
@@ -365,7 +365,7 @@ def test_array_iter():
     for i, j in zip(range(10), arr):
         assert i == j
 
-    assert isinstance(arr, compat.Iterable)
+    assert isinstance(arr, Iterable)
 
 
 def test_struct_array_slice():
@@ -393,16 +393,6 @@ def test_array_ref_to_ndarray_base():
     refcount = sys.getrefcount(arr)
     arr2 = pa.array(arr)  # noqa
     assert sys.getrefcount(arr) == (refcount + 1)
-
-
-def test_array_eq_raises():
-    # ARROW-2150: we are raising when comparing arrays until we define the
-    # behavior to either be elementwise comparisons or data equality
-    arr1 = pa.array([1, 2, 3], type=pa.int32())
-    arr2 = pa.array([1, 2, 3], type=pa.int32())
-
-    with pytest.raises(NotImplementedError):
-        arr1 == arr2
 
 
 def test_array_from_buffers():
@@ -743,19 +733,19 @@ def test_union_from_dense():
                      expected_type_code_values):
         result.validate(full=True)
         actual_field_names = [result.type[i].name
-                              for i in range(result.type.num_children)]
+                              for i in range(result.type.num_fields)]
         assert actual_field_names == expected_field_names
         assert result.type.mode == "dense"
         assert result.type.type_codes == expected_type_codes
         assert result.to_pylist() == py_value
         assert expected_type_code_values.equals(result.type_codes)
         assert value_offsets.equals(result.offsets)
-        assert result.child(0).equals(binary)
-        assert result.child(1).equals(int64)
+        assert result.field(0).equals(binary)
+        assert result.field(1).equals(int64)
         with pytest.raises(KeyError):
-            result.child(-1)
+            result.field(-1)
         with pytest.raises(KeyError):
-            result.child(2)
+            result.field(2)
 
     # without field names and type codes
     check_result(pa.UnionArray.from_dense(types, value_offsets,
@@ -818,19 +808,19 @@ def test_union_from_sparse():
         result.validate(full=True)
         assert result.to_pylist() == py_value
         actual_field_names = [result.type[i].name
-                              for i in range(result.type.num_children)]
+                              for i in range(result.type.num_fields)]
         assert actual_field_names == expected_field_names
         assert result.type.mode == "sparse"
         assert result.type.type_codes == expected_type_codes
         assert expected_type_code_values.equals(result.type_codes)
-        assert result.child(0).equals(binary)
-        assert result.child(1).equals(int64)
+        assert result.field(0).equals(binary)
+        assert result.field(1).equals(int64)
         with pytest.raises(pa.ArrowTypeError):
             result.offsets
         with pytest.raises(KeyError):
-            result.child(-1)
+            result.field(-1)
         with pytest.raises(KeyError):
-            result.child(2)
+            result.field(2)
 
     # without field names and type codes
     check_result(pa.UnionArray.from_sparse(types, [binary, int64]),
@@ -950,7 +940,7 @@ def test_cast_none():
     # ARROW-3735: Ensure that calling cast(None) doesn't segfault.
     arr = pa.array([1, 2, 3])
 
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError):
         arr.cast(None)
 
 
@@ -1174,9 +1164,9 @@ def test_decimal_to_decimal():
     )
     assert result.equals(expected)
 
-    # TODO FIXME
-    # this should fail but decimal overflow is not implemented
-    result = arr.cast(pa.decimal128(1, 2))
+    with pytest.raises(pa.ArrowInvalid,
+                       match='Decimal value does not fit in precision'):
+        result = arr.cast(pa.decimal128(5, 2))
 
 
 def test_safe_cast_nan_to_int_raises():

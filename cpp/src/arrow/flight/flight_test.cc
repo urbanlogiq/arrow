@@ -33,6 +33,7 @@
 #include "arrow/flight/api.h"
 #include "arrow/ipc/test_common.h"
 #include "arrow/status.h"
+#include "arrow/testing/generator.h"
 #include "arrow/testing/gtest_util.h"
 #include "arrow/testing/util.h"
 #include "arrow/util/make_unique.h"
@@ -323,7 +324,7 @@ Status MakeServer(std::unique_ptr<FlightServerBase>* server,
   RETURN_NOT_OK((*server)->Init(server_options));
   Location real_location;
   RETURN_NOT_OK(Location::ForGrpcTcp("localhost", (*server)->port(), &real_location));
-  FlightClientOptions client_options;
+  FlightClientOptions client_options = FlightClientOptions::Defaults();
   RETURN_NOT_OK(make_client_options(&client_options));
   return FlightClient::Connect(real_location, client_options, client);
 }
@@ -559,6 +560,14 @@ class TestDoPut : public ::testing::Test {
 class TestTls : public ::testing::Test {
  public:
   void SetUp() {
+    // Manually initialize gRPC to try to ensure some thread-locals
+    // get initialized.
+    // https://github.com/grpc/grpc/issues/13856
+    // https://github.com/grpc/grpc/issues/20311
+    // In general, gRPC on MacOS struggles with TLS (both in the sense
+    // of thread-locals and encryption)
+    grpc_init();
+
     server_.reset(new TlsTestServer);
 
     Location location;
@@ -572,7 +581,10 @@ class TestTls : public ::testing::Test {
     ASSERT_OK(ConnectClient());
   }
 
-  void TearDown() { ASSERT_OK(server_->Shutdown()); }
+  void TearDown() {
+    ASSERT_OK(server_->Shutdown());
+    grpc_shutdown();
+  }
 
   Status ConnectClient() {
     auto options = FlightClientOptions();
@@ -1281,6 +1293,25 @@ TEST_F(TestFlightClient, Issue5095) {
   ASSERT_THAT(status.message(), ::testing::HasSubstr("No data"));
 }
 
+// Test setting generic transport options by configuring gRPC to fail
+// all calls.
+TEST_F(TestFlightClient, GenericOptions) {
+  std::unique_ptr<FlightClient> client;
+  auto options = FlightClientOptions::Defaults();
+  // Set a very low limit at the gRPC layer to fail all calls
+  options.generic_options.emplace_back(GRPC_ARG_MAX_RECEIVE_MESSAGE_LENGTH, 32);
+  Location location;
+  ASSERT_OK(Location::ForGrpcTcp("localhost", server_->port(), &location));
+  ASSERT_OK(FlightClient::Connect(location, options, &client));
+  auto descr = FlightDescriptor::Path({"examples", "ints"});
+  std::unique_ptr<SchemaResult> schema_result;
+  std::shared_ptr<Schema> schema;
+  ipc::DictionaryMemo dict_memo;
+  auto status = client->GetSchema(descr, &schema_result);
+  ASSERT_RAISES(Invalid, status);
+  ASSERT_THAT(status.message(), ::testing::HasSubstr("resource exhausted"));
+}
+
 TEST_F(TestFlightClient, TimeoutFires) {
   // Server does not exist on this port, so call should fail
   std::unique_ptr<FlightClient> client;
@@ -1354,6 +1385,46 @@ TEST_F(TestDoPut, DoPutDicts) {
   }
 
   CheckDoPut(descr, schema, batches);
+}
+
+TEST_F(TestDoPut, DoPutSizeLimit) {
+  const int64_t size_limit = 4096;
+  Location location;
+  ASSERT_OK(Location::ForGrpcTcp("localhost", server_->port(), &location));
+  FlightClientOptions client_options;
+  client_options.write_size_limit_bytes = size_limit;
+  std::unique_ptr<FlightClient> client;
+  ASSERT_OK(FlightClient::Connect(location, client_options, &client));
+
+  auto descr = FlightDescriptor::Path({"ints"});
+  // Batch is too large to fit in one message
+  auto schema = arrow::schema({field("f1", arrow::int64())});
+  auto batch = arrow::ConstantArrayGenerator::Zeroes(768, schema);
+  BatchVector batches;
+  batches.push_back(batch->Slice(0, 384));
+  batches.push_back(batch->Slice(384));
+
+  std::unique_ptr<FlightStreamWriter> stream;
+  std::unique_ptr<FlightMetadataReader> reader;
+  ASSERT_OK(client->DoPut(descr, schema, &stream, &reader));
+
+  // Large batch will exceed the limit
+  const auto status = stream->WriteRecordBatch(*batch);
+  EXPECT_RAISES_WITH_MESSAGE_THAT(Invalid, ::testing::HasSubstr("exceeded soft limit"),
+                                  status);
+  auto detail = FlightWriteSizeStatusDetail::UnwrapStatus(status);
+  ASSERT_NE(nullptr, detail);
+  ASSERT_EQ(size_limit, detail->limit());
+  ASSERT_GT(detail->actual(), size_limit);
+
+  // But we can retry with a smaller batch
+  for (const auto& batch : batches) {
+    ASSERT_OK(stream->WriteRecordBatch(*batch));
+  }
+
+  ASSERT_OK(stream->DoneWriting());
+  ASSERT_OK(stream->Close());
+  CheckBatches(descr, batches);
 }
 
 TEST_F(TestAuthHandler, PassAuthenticatedCalls) {
@@ -1556,13 +1627,7 @@ TEST_F(TestBasicAuthHandler, CheckPeerIdentity) {
   ASSERT_EQ(result->body->ToString(), "user");
 }
 
-#ifdef __APPLE__
-// ARROW-7701: this test is flaky on MacOS and segfaults (due to gRPC
-// bug?)
-TEST_F(TestTls, DISABLED_DoAction) {
-#else
 TEST_F(TestTls, DoAction) {
-#endif
   FlightCallOptions options;
   options.timeout = TimeoutDuration{5.0};
   Action action;
@@ -1594,6 +1659,28 @@ TEST_F(TestTls, OverrideHostname) {
   action.body = Buffer::FromString("");
   std::unique_ptr<ResultStream> results;
   ASSERT_RAISES(IOError, client->DoAction(options, action, &results));
+}
+
+// Test the facility for setting generic transport options.
+TEST_F(TestTls, OverrideHostnameGeneric) {
+  std::unique_ptr<FlightClient> client;
+  auto client_options = FlightClientOptions();
+  client_options.generic_options.emplace_back(GRPC_SSL_TARGET_NAME_OVERRIDE_ARG,
+                                              "fakehostname");
+  CertKeyPair root_cert;
+  ASSERT_OK(ExampleTlsCertificateRoot(&root_cert));
+  client_options.tls_root_certs = root_cert.pem_cert;
+  ASSERT_OK(FlightClient::Connect(location_, client_options, &client));
+
+  FlightCallOptions options;
+  options.timeout = TimeoutDuration{5.0};
+  Action action;
+  action.type = "test";
+  action.body = Buffer::FromString("");
+  std::unique_ptr<ResultStream> results;
+  ASSERT_RAISES(IOError, client->DoAction(options, action, &results));
+  // Could check error message for the gRPC error message but it isn't
+  // necessarily stable
 }
 
 TEST_F(TestMetadata, DoGet) {

@@ -127,18 +127,20 @@ Array <- R6Class("Array",
       if (is.integer(i)) {
         i <- Array$create(i)
       }
+      # ARROW-9001: autoboxing in call_function
+      result <- call_function("take", self, i)
       if (inherits(i, "ChunkedArray")) {
-        return(shared_ptr(ChunkedArray, Array__TakeChunked(self, i)))
+        return(shared_ptr(ChunkedArray, result))
+      } else {
+        Array$create(result)
       }
-      assert_is(i, "Array")
-      Array$create(Array__Take(self, i))
     },
     Filter = function(i, keep_na = TRUE) {
       if (is.logical(i)) {
         i <- Array$create(i)
       }
       assert_is(i, "Array")
-      Array$create(Array__Filter(self, i, keep_na))
+      Array$create(call_function("filter", self, i, options = list(keep_na = keep_na)))
     },
     RangeEquals = function(other, start_idx, end_idx, other_start_idx = 0L) {
       assert_is(other, "Array")
@@ -339,3 +341,12 @@ is.Array <- function(x, type = NULL) {
   }
   is_it
 }
+
+#' @export
+as.double.Array <- function(x, ...) as.double(as.vector(x), ...)
+
+#' @export
+as.integer.Array <- function(x, ...) as.integer(as.vector(x), ...)
+
+#' @export
+as.character.Array <- function(x, ...) as.character(as.vector(x), ...)

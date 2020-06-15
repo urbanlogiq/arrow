@@ -75,12 +75,13 @@ touch ${CPYTHON_PATH}/lib/${py_libname}
 echo "=== (${PYTHON_VERSION}) Install the wheel build dependencies ==="
 $PIP install -r requirements-wheel-build.txt
 
+export PYARROW_INSTALL_TESTS=1
 export PYARROW_WITH_DATASET=1
 export PYARROW_WITH_FLIGHT=1
-export PYARROW_WITH_GANDIVA=1
+export PYARROW_WITH_GANDIVA=0
 export BUILD_ARROW_DATASET=ON
 export BUILD_ARROW_FLIGHT=ON
-export BUILD_ARROW_GANDIVA=ON
+export BUILD_ARROW_GANDIVA=OFF
 
 # ARROW-3052(wesm): ORC is being bundled until it can be added to the
 # manylinux1 image
@@ -93,6 +94,7 @@ cmake \
     -DCMAKE_BUILD_TYPE=Release \
     -DARROW_BOOST_USE_SHARED=ON \
     -DARROW_BUILD_SHARED=ON \
+    -DARROW_BUILD_STATIC=OFF \
     -DARROW_BUILD_TESTS=OFF \
     -DARROW_DATASET=${BUILD_ARROW_DATASET} \
     -DARROW_DEPENDENCY_SOURCE="SYSTEM" \
@@ -120,7 +122,6 @@ cmake \
     -DCMAKE_INSTALL_PREFIX=/arrow-dist \
     -DOPENSSL_USE_STATIC_LIBS=ON \
     -DORC_SOURCE=BUNDLED \
-    -DPythonInterp_FIND_VERSION=${PYTHON_VERSION} \
     -GNinja /arrow/cpp
 ninja
 ninja install
@@ -158,7 +159,6 @@ import sys
 import pyarrow
 import pyarrow.dataset
 import pyarrow.flight
-import pyarrow.gandiva
 import pyarrow.fs
 import pyarrow._hdfs
 import pyarrow.parquet

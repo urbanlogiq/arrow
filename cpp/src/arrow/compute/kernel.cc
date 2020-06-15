@@ -24,7 +24,9 @@
 
 #include "arrow/buffer.h"
 #include "arrow/compute/exec.h"
+#include "arrow/compute/util_internal.h"
 #include "arrow/result.h"
+#include "arrow/type_traits.h"
 #include "arrow/util/bit_util.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/hash_util.h"
@@ -43,10 +45,6 @@ namespace compute {
 // ----------------------------------------------------------------------
 // KernelContext
 
-inline void ZeroLastByte(Buffer* buffer) {
-  *(buffer->mutable_data() + (buffer->size() - 1)) = 0;
-}
-
 Result<std::shared_ptr<Buffer>> KernelContext::Allocate(int64_t nbytes) {
   ARROW_ASSIGN_OR_RAISE(std::shared_ptr<Buffer> result,
                         AllocateBuffer(nbytes, exec_ctx_->memory_pool()));
@@ -62,7 +60,7 @@ Result<std::shared_ptr<Buffer>> KernelContext::AllocateBitmap(int64_t num_bits) 
   // initialized this makes valgrind/asan unhappy, so we proactively
   // zero it.
   if (nbytes > 0) {
-    ZeroLastByte(result.get());
+    internal::ZeroByte(result.get(), result->size() - 1);
     result->ZeroPadding();
   }
   return result;
@@ -99,7 +97,6 @@ class SameTypeIdMatcher : public TypeMatcher {
     if (this == &other) {
       return true;
     }
-
     auto casted = dynamic_cast<const SameTypeIdMatcher*>(&other);
     if (casted == nullptr) {
       return false;
@@ -151,6 +148,86 @@ class TimestampUnitMatcher : public TypeMatcher {
 
 std::shared_ptr<TypeMatcher> TimestampUnit(TimeUnit::type unit) {
   return std::make_shared<TimestampUnitMatcher>(unit);
+}
+
+class IntegerMatcher : public TypeMatcher {
+ public:
+  IntegerMatcher() {}
+
+  bool Matches(const DataType& type) const override { return is_integer(type.id()); }
+
+  bool Equals(const TypeMatcher& other) const override {
+    if (this == &other) {
+      return true;
+    }
+    auto casted = dynamic_cast<const IntegerMatcher*>(&other);
+    return casted != nullptr;
+  }
+
+  std::string ToString() const override { return "integer"; }
+};
+
+std::shared_ptr<TypeMatcher> Integer() { return std::make_shared<IntegerMatcher>(); }
+
+class PrimitiveMatcher : public TypeMatcher {
+ public:
+  PrimitiveMatcher() {}
+
+  bool Matches(const DataType& type) const override { return is_primitive(type.id()); }
+
+  bool Equals(const TypeMatcher& other) const override {
+    if (this == &other) {
+      return true;
+    }
+    auto casted = dynamic_cast<const PrimitiveMatcher*>(&other);
+    return casted != nullptr;
+  }
+
+  std::string ToString() const override { return "primitive"; }
+};
+
+std::shared_ptr<TypeMatcher> Primitive() { return std::make_shared<PrimitiveMatcher>(); }
+
+class BinaryLikeMatcher : public TypeMatcher {
+ public:
+  BinaryLikeMatcher() {}
+
+  bool Matches(const DataType& type) const override { return is_binary_like(type.id()); }
+
+  bool Equals(const TypeMatcher& other) const override {
+    if (this == &other) {
+      return true;
+    }
+    auto casted = dynamic_cast<const BinaryLikeMatcher*>(&other);
+    return casted != nullptr;
+  }
+  std::string ToString() const override { return "binary-like"; }
+};
+
+std::shared_ptr<TypeMatcher> BinaryLike() {
+  return std::make_shared<BinaryLikeMatcher>();
+}
+
+class LargeBinaryLikeMatcher : public TypeMatcher {
+ public:
+  LargeBinaryLikeMatcher() {}
+
+  bool Matches(const DataType& type) const override {
+    return is_large_binary_like(type.id());
+  }
+
+  bool Equals(const TypeMatcher& other) const override {
+    if (this == &other) {
+      return true;
+    }
+    auto casted = dynamic_cast<const LargeBinaryLikeMatcher*>(&other);
+    return casted != nullptr;
+  }
+  std::string ToString() const override { return "large-binary-like"; }
+};
+
+std::shared_ptr<TypeMatcher> LargeBinaryLike() {
+  return std::make_shared<LargeBinaryLikeMatcher>();
 }
 
 }  // namespace match
@@ -257,14 +334,15 @@ OutputType::OutputType(ValueDescr descr) : OutputType(descr.type) {
 
 Result<ValueDescr> OutputType::Resolve(KernelContext* ctx,
                                        const std::vector<ValueDescr>& args) const {
+  ValueDescr::Shape broadcasted_shape = GetBroadcastShape(args);
   if (kind_ == OutputType::FIXED) {
-    ValueDescr::Shape out_shape = shape_;
-    if (out_shape == ValueDescr::ANY) {
-      out_shape = GetBroadcastShape(args);
-    }
-    return ValueDescr(type_, out_shape);
+    return ValueDescr(type_, shape_ == ValueDescr::ANY ? broadcasted_shape : shape_);
   } else {
-    return resolver_(ctx, args);
+    ARROW_ASSIGN_OR_RAISE(ValueDescr resolved_descr, resolver_(ctx, args));
+    if (resolved_descr.shape == ValueDescr::ANY) {
+      resolved_descr.shape = broadcasted_shape;
+    }
+    return resolved_descr;
   }
 }
 

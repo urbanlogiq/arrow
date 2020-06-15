@@ -25,14 +25,17 @@
 #include <vector>
 
 #include "arrow/compute/cast_internal.h"
+#include "arrow/compute/exec.h"
 #include "arrow/compute/kernel.h"
+#include "arrow/compute/registry.h"
+#include "arrow/util/logging.h"
 
 namespace arrow {
 namespace compute {
 
 namespace internal {
 
-std::unordered_map<int, std::shared_ptr<const CastFunction>> g_cast_table;
+std::unordered_map<int, std::shared_ptr<CastFunction>> g_cast_table;
 static std::once_flag cast_table_initialized;
 
 void AddCastFunctions(const std::vector<std::shared_ptr<CastFunction>>& funcs) {
@@ -50,6 +53,34 @@ void InitCastTable() {
 }
 
 void EnsureInitCastTable() { std::call_once(cast_table_initialized, InitCastTable); }
+
+// Metafunction for dispatching to appropraite CastFunction. This corresponds
+// to the standard SQL CAST(expr AS target_type)
+class CastMetaFunction : public MetaFunction {
+ public:
+  CastMetaFunction() : MetaFunction("cast", Arity::Unary()) {}
+
+  Result<Datum> ExecuteImpl(const std::vector<Datum>& args,
+                            const FunctionOptions* options,
+                            ExecContext* ctx) const override {
+    auto cast_options = static_cast<const CastOptions*>(options);
+    if (cast_options == nullptr || cast_options->to_type == nullptr) {
+      return Status::Invalid(
+          "Cast requires that options be passed with "
+          "the to_type populated");
+    }
+    if (args[0].type()->Equals(*cast_options->to_type)) {
+      return args[0];
+    }
+    ARROW_ASSIGN_OR_RAISE(std::shared_ptr<CastFunction> cast_func,
+                          GetCastFunction(cast_options->to_type));
+    return cast_func->Execute(args, options, ctx);
+  }
+};
+
+void RegisterScalarCast(FunctionRegistry* registry) {
+  DCHECK_OK(registry->AddFunction(std::make_shared<CastMetaFunction>()));
+}
 
 }  // namespace internal
 
@@ -138,16 +169,15 @@ Result<const ScalarKernel*> CastFunction::DispatchExact(
   }
 }
 
+Result<Datum> Cast(const Datum& value, const CastOptions& options, ExecContext* ctx) {
+  return CallFunction("cast", {value}, &options, ctx);
+}
+
 Result<Datum> Cast(const Datum& value, std::shared_ptr<DataType> to_type,
                    const CastOptions& options, ExecContext* ctx) {
-  if (value.type()->Equals(*to_type)) {
-    return value;
-  }
   CastOptions options_with_to_type = options;
   options_with_to_type.to_type = to_type;
-  ARROW_ASSIGN_OR_RAISE(std::shared_ptr<const CastFunction> cast_func,
-                        GetCastFunction(to_type));
-  return cast_func->Execute({Datum(value)}, &options_with_to_type, ctx);
+  return Cast(value, options_with_to_type, ctx);
 }
 
 Result<std::shared_ptr<Array>> Cast(const Array& value, std::shared_ptr<DataType> to_type,
@@ -156,7 +186,7 @@ Result<std::shared_ptr<Array>> Cast(const Array& value, std::shared_ptr<DataType
   return result.make_array();
 }
 
-Result<std::shared_ptr<const CastFunction>> GetCastFunction(
+Result<std::shared_ptr<CastFunction>> GetCastFunction(
     const std::shared_ptr<DataType>& to_type) {
   internal::EnsureInitCastTable();
   auto it = internal::g_cast_table.find(static_cast<int>(to_type->id()));
@@ -169,6 +199,7 @@ Result<std::shared_ptr<const CastFunction>> GetCastFunction(
 
 bool CanCast(const DataType& from_type, const DataType& to_type) {
   // TODO
+  internal::EnsureInitCastTable();
   auto it = internal::g_cast_table.find(static_cast<int>(from_type.id()));
   if (it == internal::g_cast_table.end()) {
     return false;

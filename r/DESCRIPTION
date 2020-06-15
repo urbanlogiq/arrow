@@ -60,6 +60,7 @@ Collate:
     'chunked-array.R'
     'io.R'
     'compression.R'
+    'scalar.R'
     'compute.R'
     'config.R'
     'csv.R'

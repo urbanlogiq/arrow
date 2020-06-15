@@ -35,10 +35,9 @@ from pyarrow._parquet import (ParquetReader, Statistics,  # noqa
                               FileMetaData, RowGroupMetaData,
                               ColumnChunkMetaData,
                               ParquetSchema, ColumnSchema)
-from pyarrow.compat import guid
 from pyarrow.filesystem import (LocalFileSystem, _ensure_filesystem,
                                 resolve_filesystem_and_path)
-from pyarrow.util import _is_path_like, _stringify_path
+from pyarrow.util import guid, _is_path_like, _stringify_path
 
 _URI_STRIP_SCHEMES = ('hdfs',)
 
@@ -439,7 +438,13 @@ use_deprecated_int96_timestamps : bool, default None
     Write timestamps to INT96 Parquet format. Defaults to False unless enabled
     by flavor argument. This take priority over the coerce_timestamps option.
 coerce_timestamps : str, default None
-    Cast timestamps a particular resolution.
+    Cast timestamps a particular resolution. The defaults depends on `version`.
+    For ``version='1.0'`` (the default), nanoseconds will be cast to
+    microseconds ('us'), and seconds to milliseconds ('ms') by default. For
+    ``version='2.0'``, the original resolution is preserved and no casting
+    is done by default. The casting might result in loss of data, in which
+    case ``allow_truncated_timestamps=True`` can be used to suppress the
+    raised exception.
     Valid values: {None, 'ms', 'us'}
 data_page_size : int, default None
     Set a target threshold for the approximate encoded size of data
@@ -1491,6 +1496,9 @@ use_threads : bool, default True
 metadata : FileMetaData
     If separately computed
 {1}
+filesystem : FileSystem, default None
+    If nothing passed, paths assumed to be found in the local on-disk
+    filesystem.
 filters : List[Tuple] or List[List[Tuple]] or None (default)
     Rows which do not match the filter predicate will be removed from scanned
     data. Partition keys embedded in a nested directory structure will be

@@ -22,15 +22,15 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "arrow/array.h"
+#include "arrow/array/util.h"
 #include "arrow/record_batch.h"
 #include "arrow/status.h"
 #include "arrow/table.h"
 #include "arrow/testing/gtest_common.h"
 #include "arrow/testing/gtest_util.h"
 #include "arrow/testing/random.h"
-#include "arrow/testing/util.h"
 #include "arrow/type.h"
+#include "arrow/util/bit_util.h"
 #include "arrow/util/key_value_metadata.h"
 
 namespace arrow {
@@ -964,6 +964,25 @@ TEST_F(TestRecordBatch, RemoveColumnEmpty) {
 
   ASSERT_OK_AND_ASSIGN(auto added, empty->AddColumn(0, field1, array1));
   AssertBatchesEqual(*added, *batch1);
+}
+
+TEST_F(TestRecordBatch, ToFromEmptyStructArray) {
+  auto batch1 =
+      RecordBatch::Make(::arrow::schema({}), 10, std::vector<std::shared_ptr<Array>>{});
+  ASSERT_OK_AND_ASSIGN(auto struct_array, batch1->ToStructArray());
+  ASSERT_EQ(10, struct_array->length());
+  ASSERT_OK_AND_ASSIGN(auto batch2, RecordBatch::FromStructArray(struct_array));
+  ASSERT_TRUE(batch1->Equals(*batch2));
+}
+
+TEST_F(TestRecordBatch, FromStructArrayInvalidType) {
+  ASSERT_RAISES(Invalid, RecordBatch::FromStructArray(MakeRandomArray<Int32Array>(10)));
+}
+
+TEST_F(TestRecordBatch, FromStructArrayInvalidNullCount) {
+  auto struct_array =
+      ArrayFromJSON(struct_({field("f1", int32())}), R"([{"f1": 1}, null])");
+  ASSERT_RAISES(Invalid, RecordBatch::FromStructArray(struct_array));
 }
 
 class TestTableBatchReader : public TestBase {};

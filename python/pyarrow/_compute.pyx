@@ -17,18 +17,12 @@
 
 # cython: language_level = 3
 
-from pyarrow.lib cimport (
-    Array,
-    wrap_datum,
-    check_status,
-    ChunkedArray,
-    ScalarValue
-)
+from pyarrow.lib import frombytes, tobytes, ordered_dict
+from pyarrow.lib cimport *
 from pyarrow.includes.libarrow cimport *
-from pyarrow.includes.common cimport *
+import pyarrow.lib as lib
 
-from pyarrow.compat import frombytes, tobytes
-
+import numpy as np
 
 cdef wrap_scalar_function(const shared_ptr[CFunction]& sp_func):
     cdef ScalarFunction func = ScalarFunction.__new__(ScalarFunction)
@@ -50,6 +44,14 @@ cdef wrap_scalar_aggregate_function(const shared_ptr[CFunction]& sp_func):
     return func
 
 
+cdef wrap_meta_function(const shared_ptr[CFunction]& sp_func):
+    cdef MetaFunction func = (
+        MetaFunction.__new__(MetaFunction)
+    )
+    func.init(sp_func)
+    return func
+
+
 cdef wrap_function(const shared_ptr[CFunction]& sp_func):
     if sp_func.get() == NULL:
         raise ValueError('Function was NULL')
@@ -61,6 +63,8 @@ cdef wrap_function(const shared_ptr[CFunction]& sp_func):
         return wrap_vector_function(sp_func)
     elif c_kind == FunctionKind_SCALAR_AGGREGATE:
         return wrap_scalar_aggregate_function(sp_func)
+    elif c_kind == FunctionKind_META:
+        return wrap_meta_function(sp_func)
     else:
         raise NotImplementedError("Unknown Function::Kind")
 
@@ -169,7 +173,7 @@ num_kernels: {}
     def num_kernels(self):
         return self.base_func.num_kernels()
 
-    def call(self, args, options=None):
+    def call(self, args, FunctionOptions options=None):
         cdef:
             const CFunctionOptions* c_options = NULL
             vector[CDatum] c_args
@@ -177,8 +181,8 @@ num_kernels: {}
 
         _pack_compute_args(args, &c_args)
 
-        if isinstance(options, FunctionOptions):
-            c_options = (<FunctionOptions> options).options()
+        if options is not None:
+            c_options = options.get_options()
 
         with nogil:
             result = GetResultValue(self.base_func.Execute(c_args, c_options))
@@ -227,14 +231,30 @@ cdef class ScalarAggregateFunction(Function):
         return [wrap_scalar_aggregate_kernel(k) for k in kernels]
 
 
+cdef class MetaFunction(Function):
+    cdef:
+        const CMetaFunction* func
+
+    cdef void init(self, const shared_ptr[CFunction]& sp_func) except *:
+        Function.init(self, sp_func)
+        self.func = <const CMetaFunction*> sp_func.get()
+
+
 cdef _pack_compute_args(object values, vector[CDatum]* out):
     for val in values:
+        if isinstance(val, (list, np.ndarray)):
+            val = lib.asarray(val)
+
         if isinstance(val, Array):
             out.push_back(CDatum((<Array> val).sp_array))
         elif isinstance(val, ChunkedArray):
             out.push_back(CDatum((<ChunkedArray> val).sp_chunked_array))
         elif isinstance(val, ScalarValue):
             out.push_back(CDatum((<ScalarValue> val).sp_scalar))
+        elif isinstance(val, RecordBatch):
+            out.push_back(CDatum((<RecordBatch> val).sp_batch))
+        elif isinstance(val, Table):
+            out.push_back(CDatum((<Table> val).sp_table))
         else:
             raise TypeError(type(val))
 
@@ -273,26 +293,106 @@ def call_function(name, args, options=None):
 
 cdef class FunctionOptions:
 
-    cdef const CFunctionOptions* options(self) except NULL:
+    cdef const CFunctionOptions* get_options(self) except NULL:
         raise NotImplementedError("Unimplemented base options")
 
 
 cdef class CastOptions(FunctionOptions):
-    cdef:
-        CCastOptions cast_options
+
+    __slots__ = ()  # avoid mistakingly creating attributes
+
+    def __init__(self, DataType target_type=None, allow_int_overflow=None,
+                 allow_time_truncate=None, allow_time_overflow=None,
+                 allow_float_truncate=None, allow_invalid_utf8=None):
+        if allow_int_overflow is not None:
+            self.allow_int_overflow = allow_int_overflow
+        if allow_time_truncate is not None:
+            self.allow_time_truncate = allow_time_truncate
+        if allow_time_overflow is not None:
+            self.allow_time_overflow = allow_time_overflow
+        if allow_float_truncate is not None:
+            self.allow_float_truncate = allow_float_truncate
+        if allow_invalid_utf8 is not None:
+            self.allow_invalid_utf8 = allow_invalid_utf8
+
+    cdef const CFunctionOptions* get_options(self) except NULL:
+        return &self.options
 
     @staticmethod
-    def safe():
-        cdef CastOptions options = CastOptions()
-        options.cast_options = CCastOptions.Safe()
+    cdef wrap(CCastOptions options):
+        cdef CastOptions self = CastOptions.__new__(CastOptions)
+        self.options = options
+        return self
+
+    cdef inline CCastOptions unwrap(self) nogil:
+        return self.options
 
     @staticmethod
-    def unsafe():
-        cdef CastOptions options = CastOptions()
-        options.cast_options = CCastOptions.Unsafe()
+    def safe(target_type=None):
+        options = CastOptions.wrap(CCastOptions.Safe())
+        options._set_type(target_type)
+        return options
 
-    cdef const CFunctionOptions* options(self) except NULL:
-        return &self.cast_options
+    @staticmethod
+    def unsafe(target_type=None):
+        options = CastOptions.wrap(CCastOptions.Unsafe())
+        options._set_type(target_type)
+        return options
+
+    def _set_type(self, target_type=None):
+        if target_type is not None:
+            self.options.to_type = (
+                (<DataType> ensure_type(target_type)).sp_type
+            )
+
+    def is_safe(self):
+        return not (
+            self.options.allow_int_overflow or
+            self.options.allow_time_truncate or
+            self.options.allow_time_overflow or
+            self.options.allow_float_truncate or
+            self.options.allow_invalid_utf8
+        )
+
+    @property
+    def allow_int_overflow(self):
+        return self.options.allow_int_overflow
+
+    @allow_int_overflow.setter
+    def allow_int_overflow(self, bint flag):
+        self.options.allow_int_overflow = flag
+
+    @property
+    def allow_time_truncate(self):
+        return self.options.allow_time_truncate
+
+    @allow_time_truncate.setter
+    def allow_time_truncate(self, bint flag):
+        self.options.allow_time_truncate = flag
+
+    @property
+    def allow_time_overflow(self):
+        return self.options.allow_time_overflow
+
+    @allow_time_overflow.setter
+    def allow_time_overflow(self, bint flag):
+        self.options.allow_time_overflow = flag
+
+    @property
+    def allow_float_truncate(self):
+        return self.options.allow_float_truncate
+
+    @allow_float_truncate.setter
+    def allow_float_truncate(self, bint flag):
+        self.options.allow_float_truncate = flag
+
+    @property
+    def allow_invalid_utf8(self):
+        return self.options.allow_invalid_utf8
+
+    @allow_invalid_utf8.setter
+    def allow_invalid_utf8(self, bint flag):
+        self.options.allow_invalid_utf8 = flag
 
 
 cdef class FilterOptions(FunctionOptions):
@@ -314,5 +414,16 @@ cdef class FilterOptions(FunctionOptions):
                     null_selection_behavior)
             )
 
-    cdef const CFunctionOptions* options(self) except NULL:
+    cdef const CFunctionOptions* get_options(self) except NULL:
         return &self.filter_options
+
+
+cdef class TakeOptions(FunctionOptions):
+    cdef:
+        CTakeOptions take_options
+
+    def __init__(self, boundscheck=True):
+        self.take_options.boundscheck = boundscheck
+
+    cdef const CFunctionOptions* get_options(self) except NULL:
+        return &self.take_options

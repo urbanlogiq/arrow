@@ -28,8 +28,6 @@ import warnings
 from io import BufferedIOBase, IOBase, TextIOBase, UnsupportedOperation
 
 from pyarrow.util import _is_path_like, _stringify_path
-from pyarrow.compat import (
-    builtin_pickle, frombytes, tobytes, encode_file_path)
 
 
 # 64K
@@ -166,7 +164,7 @@ cdef class NativeFile:
         self._assert_open()
         if not self.is_readable:
             # XXX UnsupportedOperation
-            raise IOError("only valid on readonly files")
+            raise IOError("only valid on readable files")
 
     def _assert_writable(self):
         self._assert_open()

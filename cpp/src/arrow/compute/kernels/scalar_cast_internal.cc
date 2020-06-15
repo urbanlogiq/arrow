@@ -15,14 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <utility>
-
-#include "arrow/compute/kernels/common.h"
 #include "arrow/compute/kernels/scalar_cast_internal.h"
+#include "arrow/compute/cast_internal.h"
+#include "arrow/compute/kernels/common.h"
+#include "arrow/extension_type.h"
 
 namespace arrow {
 namespace compute {
 namespace internal {
+
+void UnpackDictionary(KernelContext* ctx, const ExecBatch& batch, Datum* out) {
+  DictionaryArray dict_arr(batch[0].array());
+  const CastOptions& options = checked_cast<const CastState&>(*ctx->state()).options;
+
+  const auto& dict_type = *dict_arr.dictionary()->type();
+  if (!dict_type.Equals(options.to_type)) {
+    ctx->SetStatus(Status::Invalid("Cast type ", options.to_type->ToString(),
+                                   " incompatible with dictionary type ",
+                                   dict_type.ToString()));
+    return;
+  }
+
+  Result<Datum> result = Take(Datum(dict_arr.dictionary()), Datum(dict_arr.indices()),
+                              /*options=*/TakeOptions::Defaults(), ctx->exec_context());
+  if (!result.ok()) {
+    ctx->SetStatus(result.status());
+    return;
+  }
+  *out = *result;
+}
+
+void OutputAllNull(KernelContext* ctx, const ExecBatch& batch, Datum* out) {
+  ArrayData* output = out->mutable_array();
+  output->buffers = {nullptr};
+  output->null_count = batch.length;
+}
 
 void CastFromExtension(KernelContext* ctx, const ExecBatch& batch, Datum* out) {
   const CastOptions& options = checked_cast<const CastState*>(ctx->state())->options;

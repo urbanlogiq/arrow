@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include <memory>
+#include <string>
 #include <utility>
 
 #include "arrow/compute/exec.h"  // IWYU pragma: keep
@@ -31,22 +31,39 @@
 #include "arrow/util/visibility.h"
 
 namespace arrow {
-
-class Array;
-
 namespace compute {
 
 // ----------------------------------------------------------------------
 
-/// \brief Add two values together. Array values must be the same length. If a
-/// value is null in either addend, the result is null
+/// \brief Add two values together. Array values must be the same length. If
+/// either addend is null the result will be null.
 ///
-/// \param[in] left the first value
-/// \param[in] right the second value
+/// \param[in] left the first addend
+/// \param[in] right the second addend
 /// \param[in] ctx the function execution context, optional
-/// \return the elementwise addition of the values
+/// \return the elementwise sum
 ARROW_EXPORT
 Result<Datum> Add(const Datum& left, const Datum& right, ExecContext* ctx = NULLPTR);
+
+/// \brief Subtract two values. Array values must be the same length. If the
+/// minuend or subtrahend is null the result will be null.
+///
+/// \param[in] left the value subtracted from (minuend)
+/// \param[in] right the value by which the minuend is reduced (subtrahend)
+/// \param[in] ctx the function execution context, optional
+/// \return the elementwise difference
+ARROW_EXPORT
+Result<Datum> Subtract(const Datum& left, const Datum& right, ExecContext* ctx = NULLPTR);
+
+/// \brief Multiply two values. Array values must be the same length. If either
+/// factor is null the result will be null.
+///
+/// \param[in] left the first factor
+/// \param[in] right the second factor
+/// \param[in] ctx the function execution context, optional
+/// \return the elementwise product
+ARROW_EXPORT
+Result<Datum> Multiply(const Datum& left, const Datum& right, ExecContext* ctx = NULLPTR);
 
 enum CompareOperator {
   EQUAL,
@@ -203,6 +220,17 @@ Result<Datum> IsIn(const Datum& values, const Datum& value_set,
 ARROW_EXPORT
 Result<Datum> Match(const Datum& values, const Datum& value_set,
                     ExecContext* ctx = NULLPTR);
+
+// ----------------------------------------------------------------------
+// Temporal functions
+
+struct ARROW_EXPORT StrptimeOptions : public FunctionOptions {
+  explicit StrptimeOptions(std::string format, TimeUnit::type unit)
+      : format(format), unit(unit) {}
+
+  std::string format;
+  TimeUnit::type unit;
+};
 
 }  // namespace compute
 }  // namespace arrow

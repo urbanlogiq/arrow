@@ -17,11 +17,13 @@
 
 #include "arrow/compute/api_scalar.h"
 
+#include <memory>
 #include <sstream>
 #include <string>
-#include <utility>
 
 #include "arrow/compute/exec.h"
+#include "arrow/status.h"
+#include "arrow/type.h"
 
 namespace arrow {
 namespace compute {
@@ -40,6 +42,8 @@ namespace compute {
 // Arithmetic
 
 SCALAR_EAGER_BINARY(Add, "add")
+SCALAR_EAGER_BINARY(Subtract, "subtract")
+SCALAR_EAGER_BINARY(Multiply, "multiply")
 
 // ----------------------------------------------------------------------
 // Set-related operations
