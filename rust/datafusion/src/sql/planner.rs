@@ -248,7 +248,9 @@ impl<S: SchemaProvider> SqlToRel<S> {
                             ),
                             asc: e.asc,
                             // by default nulls first to be consistent with spark
-                            nulls_first: e.nulls_first.unwrap_or(true),
+                            // mburke 2020-06-15 our custom version of sqlparser-rs does not have
+                            // nulls_first as a member of the SQLOrderByExpr type.
+                            nulls_first: true, // e.nulls_first.unwrap_or(true),
                         })
                     })
                     .collect();
