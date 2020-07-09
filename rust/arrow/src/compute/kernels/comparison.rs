@@ -588,7 +588,7 @@ where
 
     let left_data = left.data();
     let left_null_bitmap = match left_data.null_bitmap() {
-        Some(bitmap) => bitmap.clone().to_buffer(),
+        Some(bitmap) => bitmap.clone().into_buffer(),
         _ => new_all_set_buffer(left.len()),
     };
     let left_null_bitmap = left_null_bitmap.data();
@@ -655,7 +655,7 @@ pub fn contains_utf8(left: &StringArray, right: &ListArray) -> Result<BooleanArr
 
     let left_data = left.data();
     let left_null_bitmap = match left_data.null_bitmap() {
-        Some(bitmap) => bitmap.clone().to_buffer(),
+        Some(bitmap) => bitmap.clone().into_buffer(),
         _ => new_all_set_buffer(left.len()),
     };
     let left_null_bitmap = left_null_bitmap.data();
