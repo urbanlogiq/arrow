@@ -35,35 +35,49 @@ namespace compute {
 
 // ----------------------------------------------------------------------
 
+struct ArithmeticOptions : public FunctionOptions {
+  ArithmeticOptions() : check_overflow(false) {}
+  bool check_overflow;
+};
+
 /// \brief Add two values together. Array values must be the same length. If
 /// either addend is null the result will be null.
 ///
 /// \param[in] left the first addend
 /// \param[in] right the second addend
+/// \param[in] options arithmetic options (overflow handling), optional
 /// \param[in] ctx the function execution context, optional
 /// \return the elementwise sum
 ARROW_EXPORT
-Result<Datum> Add(const Datum& left, const Datum& right, ExecContext* ctx = NULLPTR);
+Result<Datum> Add(const Datum& left, const Datum& right,
+                  ArithmeticOptions options = ArithmeticOptions(),
+                  ExecContext* ctx = NULLPTR);
 
 /// \brief Subtract two values. Array values must be the same length. If the
 /// minuend or subtrahend is null the result will be null.
 ///
 /// \param[in] left the value subtracted from (minuend)
 /// \param[in] right the value by which the minuend is reduced (subtrahend)
+/// \param[in] options arithmetic options (overflow handling), optional
 /// \param[in] ctx the function execution context, optional
 /// \return the elementwise difference
 ARROW_EXPORT
-Result<Datum> Subtract(const Datum& left, const Datum& right, ExecContext* ctx = NULLPTR);
+Result<Datum> Subtract(const Datum& left, const Datum& right,
+                       ArithmeticOptions options = ArithmeticOptions(),
+                       ExecContext* ctx = NULLPTR);
 
 /// \brief Multiply two values. Array values must be the same length. If either
 /// factor is null the result will be null.
 ///
 /// \param[in] left the first factor
 /// \param[in] right the second factor
+/// \param[in] options arithmetic options (overflow handling), optional
 /// \param[in] ctx the function execution context, optional
 /// \return the elementwise product
 ARROW_EXPORT
-Result<Datum> Multiply(const Datum& left, const Datum& right, ExecContext* ctx = NULLPTR);
+Result<Datum> Multiply(const Datum& left, const Datum& right,
+                       ArithmeticOptions options = ArithmeticOptions(),
+                       ExecContext* ctx = NULLPTR);
 
 enum CompareOperator {
   EQUAL,
@@ -220,6 +234,39 @@ Result<Datum> IsIn(const Datum& values, const Datum& value_set,
 ARROW_EXPORT
 Result<Datum> Match(const Datum& values, const Datum& value_set,
                     ExecContext* ctx = NULLPTR);
+
+/// \brief IsValid returns true for each element of `values` that is not null,
+/// false otherwise
+///
+/// \param[in] values input to examine for validity
+/// \param[in] ctx the function execution context, optional
+/// \return the resulting datum
+///
+/// \since 1.0.0
+/// \note API not yet finalized
+ARROW_EXPORT
+Result<Datum> IsValid(const Datum& values, ExecContext* ctx = NULLPTR);
+
+/// \brief IsNull returns true for each element of `values` that is null,
+/// false otherwise
+///
+/// \param[in] values input to examine for nullity
+/// \param[in] ctx the function execution context, optional
+/// \return the resulting datum
+///
+/// \since 1.0.0
+/// \note API not yet finalized
+ARROW_EXPORT
+Result<Datum> IsNull(const Datum& values, ExecContext* ctx = NULLPTR);
+
+// ----------------------------------------------------------------------
+// String functions
+
+struct ARROW_EXPORT BinaryContainsExactOptions : public FunctionOptions {
+  explicit BinaryContainsExactOptions(std::string pattern) : pattern(pattern) {}
+
+  std::string pattern;
+};
 
 // ----------------------------------------------------------------------
 // Temporal functions

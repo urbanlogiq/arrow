@@ -23,10 +23,10 @@
 #include <gtest/gtest.h>
 
 #include "arrow/array.h"
+#include "arrow/chunked_array.h"
 #include "arrow/compute/api_aggregate.h"
 #include "arrow/compute/kernels/aggregate_internal.h"
 #include "arrow/compute/kernels/test_util.h"
-#include "arrow/table.h"
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/checked_cast.h"
@@ -127,6 +127,41 @@ void ValidateSum(const Array& array) {
   ValidateSum<ArrowType>(array, NaiveSum<ArrowType>(array));
 }
 
+using UnaryOp = Result<Datum>(const Datum&, ExecContext*);
+
+template <UnaryOp& Op, typename ScalarType>
+void ValidateBooleanAgg(const std::string& json,
+                        const std::shared_ptr<ScalarType>& expected) {
+  auto array = ArrayFromJSON(boolean(), json);
+  auto exp = Datum(expected);
+  ASSERT_OK_AND_ASSIGN(Datum result, Op(array, nullptr));
+  ASSERT_TRUE(result.Equals(exp));
+}
+
+TEST(TestBooleanAggregation, Sum) {
+  ValidateBooleanAgg<Sum>("[]", std::make_shared<UInt64Scalar>());
+  ValidateBooleanAgg<Sum>("[null]", std::make_shared<UInt64Scalar>());
+  ValidateBooleanAgg<Sum>("[null, false]", std::make_shared<UInt64Scalar>(0));
+  ValidateBooleanAgg<Sum>("[true]", std::make_shared<UInt64Scalar>(1));
+  ValidateBooleanAgg<Sum>("[true, false, true]", std::make_shared<UInt64Scalar>(2));
+  ValidateBooleanAgg<Sum>("[true, false, true, true, null]",
+                          std::make_shared<UInt64Scalar>(3));
+}
+
+TEST(TestBooleanAggregation, Mean) {
+  ValidateBooleanAgg<Mean>("[]", std::make_shared<DoubleScalar>());
+  ValidateBooleanAgg<Mean>("[null]", std::make_shared<DoubleScalar>());
+  ValidateBooleanAgg<Mean>("[null, false]", std::make_shared<DoubleScalar>(0));
+  ValidateBooleanAgg<Mean>("[true]", std::make_shared<DoubleScalar>(1));
+  ValidateBooleanAgg<Mean>("[true, false, true, false]",
+                           std::make_shared<DoubleScalar>(0.5));
+  ValidateBooleanAgg<Mean>("[true, null]", std::make_shared<DoubleScalar>(1));
+  ValidateBooleanAgg<Mean>("[true, null, false, true, true]",
+                           std::make_shared<DoubleScalar>(0.75));
+  ValidateBooleanAgg<Mean>("[true, null, false, false, false]",
+                           std::make_shared<DoubleScalar>(0.25));
+}
+
 template <typename ArrowType>
 class TestNumericSumKernel : public ::testing::Test {};
 
@@ -205,7 +240,7 @@ TYPED_TEST(TestRandomNumericSumKernel, RandomSliceArraySum) {
 ///
 /// Count
 ///
-//
+
 using CountPair = std::pair<int64_t, int64_t>;
 
 static CountPair NaiveCount(const Array& array) {
@@ -346,10 +381,10 @@ TYPED_TEST(TestRandomNumericMeanKernel, RandomArrayMean) {
 ///
 
 template <typename ArrowType>
-class TestNumericMinMaxKernel : public ::testing::Test {
+class TestPrimitiveMinMaxKernel : public ::testing::Test {
   using Traits = TypeTraits<ArrowType>;
   using ArrayType = typename Traits::ArrayType;
-  using c_type = typename ArrayType::value_type;
+  using c_type = typename ArrowType::c_type;
   using ScalarType = typename Traits::ScalarType;
 
  public:
@@ -367,13 +402,13 @@ class TestNumericMinMaxKernel : public ::testing::Test {
 
   void AssertMinMaxIs(const std::string& json, c_type expected_min, c_type expected_max,
                       const MinMaxOptions& options) {
-    auto array = ArrayFromJSON(Traits::type_singleton(), json);
+    auto array = ArrayFromJSON(type_singleton(), json);
     AssertMinMaxIs(array, expected_min, expected_max, options);
   }
 
   void AssertMinMaxIs(const std::vector<std::string>& json, c_type expected_min,
                       c_type expected_max, const MinMaxOptions& options) {
-    auto array = ChunkedArrayFromJSON(Traits::type_singleton(), json);
+    auto array = ChunkedArrayFromJSON(type_singleton(), json);
     AssertMinMaxIs(array, expected_min, expected_max, options);
   }
 
@@ -387,27 +422,71 @@ class TestNumericMinMaxKernel : public ::testing::Test {
   }
 
   void AssertMinMaxIsNull(const std::string& json, const MinMaxOptions& options) {
-    auto array = ArrayFromJSON(Traits::type_singleton(), json);
+    auto array = ArrayFromJSON(type_singleton(), json);
     AssertMinMaxIsNull(array, options);
   }
 
   void AssertMinMaxIsNull(const std::vector<std::string>& json,
                           const MinMaxOptions& options) {
-    auto array = ChunkedArrayFromJSON(Traits::type_singleton(), json);
+    auto array = ChunkedArrayFromJSON(type_singleton(), json);
     AssertMinMaxIsNull(array, options);
   }
+
+  std::shared_ptr<DataType> type_singleton() { return Traits::type_singleton(); }
 };
 
 template <typename ArrowType>
-class TestFloatingMinMaxKernel : public TestNumericMinMaxKernel<ArrowType> {};
+class TestIntegerMinMaxKernel : public TestPrimitiveMinMaxKernel<ArrowType> {};
 
-TYPED_TEST_SUITE(TestNumericMinMaxKernel, IntegralArrowTypes);
-TYPED_TEST(TestNumericMinMaxKernel, Basics) {
+template <typename ArrowType>
+class TestFloatingMinMaxKernel : public TestPrimitiveMinMaxKernel<ArrowType> {};
+
+class TestBooleanMinMaxKernel : public TestPrimitiveMinMaxKernel<BooleanType> {};
+
+TEST_F(TestBooleanMinMaxKernel, Basics) {
+  MinMaxOptions options;
+  std::vector<std::string> chunked_input0 = {"[]", "[]"};
+  std::vector<std::string> chunked_input1 = {"[true, true, null]", "[true, null]"};
+  std::vector<std::string> chunked_input2 = {"[false, false, false]", "[false]"};
+  std::vector<std::string> chunked_input3 = {"[true, null]", "[null, false]"};
+
+  // SKIP nulls by default
+  this->AssertMinMaxIsNull("[]", options);
+  this->AssertMinMaxIsNull("[null, null, null]", options);
+  this->AssertMinMaxIs("[false, false, false]", false, false, options);
+  this->AssertMinMaxIs("[false, false, false, null]", false, false, options);
+  this->AssertMinMaxIs("[true, null, true, true]", true, true, options);
+  this->AssertMinMaxIs("[true, null, true, true]", true, true, options);
+  this->AssertMinMaxIs("[true, null, false, true]", false, true, options);
+  this->AssertMinMaxIsNull(chunked_input0, options);
+  this->AssertMinMaxIs(chunked_input1, true, true, options);
+  this->AssertMinMaxIs(chunked_input2, false, false, options);
+  this->AssertMinMaxIs(chunked_input3, false, true, options);
+
+  options = MinMaxOptions(MinMaxOptions::OUTPUT_NULL);
+  this->AssertMinMaxIsNull("[]", options);
+  this->AssertMinMaxIsNull("[null, null, null]", options);
+  this->AssertMinMaxIsNull("[false, null, false]", options);
+  this->AssertMinMaxIsNull("[true, null]", options);
+  this->AssertMinMaxIs("[true, true, true]", true, true, options);
+  this->AssertMinMaxIs("[false, false]", false, false, options);
+  this->AssertMinMaxIs("[false, true]", false, true, options);
+  this->AssertMinMaxIsNull(chunked_input0, options);
+  this->AssertMinMaxIsNull(chunked_input1, options);
+  this->AssertMinMaxIs(chunked_input2, false, false, options);
+  this->AssertMinMaxIsNull(chunked_input3, options);
+}
+
+TYPED_TEST_SUITE(TestIntegerMinMaxKernel, IntegralArrowTypes);
+TYPED_TEST(TestIntegerMinMaxKernel, Basics) {
   MinMaxOptions options;
   std::vector<std::string> chunked_input1 = {"[5, 1, 2, 3, 4]", "[9, 1, null, 3, 4]"};
   std::vector<std::string> chunked_input2 = {"[5, null, 2, 3, 4]", "[9, 1, 2, 3, 4]"};
   std::vector<std::string> chunked_input3 = {"[5, 1, 2, 3, null]", "[9, 1, null, 3, 4]"};
 
+  // SKIP nulls by default
+  this->AssertMinMaxIsNull("[]", options);
+  this->AssertMinMaxIsNull("[null, null, null]", options);
   this->AssertMinMaxIs("[5, 1, 2, 3, 4]", 1, 5, options);
   this->AssertMinMaxIs("[5, null, 2, 3, 4]", 2, 5, options);
   this->AssertMinMaxIs(chunked_input1, 1, 9, options);
@@ -452,6 +531,18 @@ TYPED_TEST(TestFloatingMinMaxKernel, Floats) {
   this->AssertMinMaxIsNull(chunked_input1, options);
   this->AssertMinMaxIsNull(chunked_input2, options);
   this->AssertMinMaxIsNull(chunked_input3, options);
+}
+
+TYPED_TEST(TestFloatingMinMaxKernel, DefaultOptions) {
+  auto values = ArrayFromJSON(this->type_singleton(), "[0, 1, 2, 3, 4]");
+
+  ASSERT_OK_AND_ASSIGN(auto no_options_provided, CallFunction("minmax", {values}));
+
+  auto default_options = MinMaxOptions::Defaults();
+  ASSERT_OK_AND_ASSIGN(auto explicit_defaults,
+                       CallFunction("minmax", {values}, &default_options));
+
+  AssertDatumsEqual(explicit_defaults, no_options_provided);
 }
 
 }  // namespace compute

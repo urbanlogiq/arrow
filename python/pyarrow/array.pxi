@@ -316,6 +316,24 @@ def asarray(values, type=None):
         return array(values, type=type)
 
 
+def nulls(size, type=None, MemoryPool memory_pool=None):
+    cdef:
+        CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
+        int64_t length = size
+        shared_ptr[CDataType] ty
+        shared_ptr[CArray] arr
+
+    type = ensure_type(type, allow_none=True)
+    if type is None:
+        type = null()
+
+    ty = pyarrow_unwrap_data_type(type)
+    with nogil:
+        arr = GetResultValue(MakeArrayOfNull(ty, length, pool))
+
+    return pyarrow_wrap_array(arr)
+
+
 def infer_type(values, mask=None, from_pandas=False):
     """
     Attempt to infer Arrow data type that can hold the passed Python
@@ -512,6 +530,7 @@ cdef class _PandasConvertible:
             bint zero_copy_only=False,
             bint integer_object_nulls=False,
             bint date_as_object=True,
+            bint timestamp_as_object=False,
             bint use_threads=True,
             bint deduplicate_objects=True,
             bint ignore_metadata=False,
@@ -540,6 +559,11 @@ cdef class _PandasConvertible:
             Cast integers with nulls to objects
         date_as_object : bool, default True
             Cast dates to objects. If False, convert to datetime64[ns] dtype.
+        timestamp_as_object : bool, default False
+            Cast non-nanosecond timestamps (np.datetime64) to objects. This is
+            useful if you have timestamps that don't fit in the normal date
+            range of nanosecond timestamps (1678 CE-2262 CE).
+            If False, all timestamps are converted to datetime64[ns] dtype.
         use_threads: bool, default True
             Whether to parallelize the conversion using multiple threads.
         deduplicate_objects : bool, default False
@@ -582,6 +606,7 @@ cdef class _PandasConvertible:
             zero_copy_only=zero_copy_only,
             integer_object_nulls=integer_object_nulls,
             date_as_object=date_as_object,
+            timestamp_as_object=timestamp_as_object,
             use_threads=use_threads,
             deduplicate_objects=deduplicate_objects,
             safe=safe,
@@ -600,6 +625,7 @@ cdef PandasOptions _convert_pandas_options(dict options):
     result.zero_copy_only = options['zero_copy_only']
     result.integer_object_nulls = options['integer_object_nulls']
     result.date_as_object = options['date_as_object']
+    result.timestamp_as_object = options['timestamp_as_object']
     result.use_threads = options['use_threads']
     result.deduplicate_objects = options['deduplicate_objects']
     result.safe_cast = options['safe']
@@ -865,8 +891,17 @@ cdef class Array(_PandasConvertible):
         else:
             return 0
 
-    def isnull(self):
-        raise NotImplementedError()
+    def is_null(self):
+        """
+        Return BooleanArray indicating the null values.
+        """
+        return _pc().is_null(self)
+
+    def is_valid(self):
+        """
+        Return BooleanArray indicating the non-null values.
+        """
+        return _pc().is_valid(self)
 
     def __getitem__(self, key):
         """
@@ -888,7 +923,7 @@ cdef class Array(_PandasConvertible):
         return self.getitem(_normalize_index(key, self.length()))
 
     cdef getitem(self, int64_t i):
-        return box_scalar(self.type, self.sp_array, i)
+        return Scalar.wrap(GetResultValue(self.ap.GetScalar(i)))
 
     def slice(self, offset=0, length=None):
         """
@@ -1126,7 +1161,17 @@ cdef _array_like_to_pandas(obj, options):
                 (<ChunkedArray> obj).sp_chunked_array,
                 obj, &out))
 
-    result = pandas_api.series(wrap_array_output(out), name=name)
+    arr = wrap_array_output(out)
+
+    if (isinstance(original_type, TimestampType) and
+            options["timestamp_as_object"]):
+        # ARROW-5359 - need to specify object dtype to avoid pandas to
+        # coerce back to ns resolution
+        dtype = "object"
+    else:
+        dtype = None
+
+    result = pandas_api.series(arr, dtype=dtype, name=name)
 
     if (isinstance(original_type, TimestampType) and
             original_type.tz is not None):
@@ -1158,6 +1203,13 @@ cdef class BooleanArray(Array):
     """
     Concrete class for Arrow arrays of boolean data type.
     """
+    @property
+    def false_count(self):
+        return (<CBooleanArray*> self.ap).false_count()
+
+    @property
+    def true_count(self):
+        return (<CBooleanArray*> self.ap).true_count()
 
 
 cdef class NumericArray(Array):
@@ -1290,8 +1342,68 @@ cdef class Decimal128Array(FixedSizeBinaryArray):
     Concrete class for Arrow arrays of decimal128 data type.
     """
 
+cdef class BaseListArray(Array):
 
-cdef class ListArray(Array):
+    def flatten(self):
+        """
+        Unnest this ListArray/LargeListArray by one level.
+
+        The returned Array is logically a concatenation of all the sub-lists
+        in this Array.
+
+        Note that this method is different from ``self.values()`` in that
+        it takes care of the slicing offset as well as null elements backed
+        by non-empty sub-lists.
+
+        Returns
+        -------
+        result : Array
+        """
+        return _pc().list_flatten(self)
+
+    def value_parent_indices(self):
+        """
+        Return array of same length as list child values array where each
+        output value is the index of the parent list array slot containing each
+        child value.
+
+        Examples
+        --------
+        >>> arr = pa.array([[1, 2, 3], [], None, [4]],
+        ...                type=pa.list_(pa.int32()))
+        >>> arr.value_parent_indices()
+        <pyarrow.lib.Int32Array object at 0x7efc5db958a0>
+        [
+          0,
+          0,
+          0,
+          3
+        ]
+        """
+        return _pc().list_parent_indices(self)
+
+    def value_lengths(self):
+        """
+        Return integers array with values equal to the respective length of
+        each list element. Null list values are null in the output.
+
+        Examples
+        --------
+        >>> arr = pa.array([[1, 2, 3], [], None, [4]],
+        ...                type=pa.list_(pa.int32()))
+        >>> arr.value_lengths()
+        <pyarrow.lib.Int32Array object at 0x7efc5db95910>
+        [
+          3,
+          0,
+          null,
+          1
+        ]
+        """
+        return _pc().list_value_lengths(self)
+
+
+cdef class ListArray(BaseListArray):
     """
     Concrete class for Arrow arrays of a list data type.
     """
@@ -1335,43 +1447,10 @@ cdef class ListArray(Array):
         """
         Return the offsets as an int32 array.
         """
-        return Array.from_buffers(
-            int32(), len(self) + 1, [None, self.buffers()[1]],
-            offset=self.offset)
-
-    def flatten(self, MemoryPool memory_pool=None):
-        """
-        Unnest this ListArray by one level.
-
-        The returned Array is logically a concatenation of all the sub-lists
-        in this Array.
-
-        Note that this method is different from ``self.values()`` in that
-        it takes care of the slicing offset as well as null elements backed
-        by non-empty sub-lists.
-
-        Parameters
-        ----------
-        memory_pool : pyarrow.MemoryPool, optional
-            If not passed, will allocate memory from the currently-set default
-            memory pool
-
-        Returns
-        -------
-        result : Array
-        """
-        cdef:
-            shared_ptr[CArray] c_result_array
-            CMemoryPool* cpool = maybe_unbox_memory_pool(memory_pool)
-            CListArray* arr = <CListArray*> self.ap
-
-        with nogil:
-            c_result_array = GetResultValue(arr.Flatten(cpool))
-
-        return pyarrow_wrap_array(c_result_array)
+        return pyarrow_wrap_array((<CListArray*> self.ap).offsets())
 
 
-cdef class LargeListArray(Array):
+cdef class LargeListArray(BaseListArray):
     """
     Concrete class for Arrow arrays of a large list data type.
 
@@ -1418,40 +1497,7 @@ cdef class LargeListArray(Array):
         """
         Return the offsets as an int64 array.
         """
-        return Array.from_buffers(
-            int64(), len(self) + 1, [None, self.buffers()[1]],
-            offset=self.offset)
-
-    def flatten(self, MemoryPool memory_pool=None):
-        """
-        Unnest this LargeListArray by one level.
-
-        The returned Array is logically a concatenation of all the sub-lists
-        in this Array.
-
-        Note that this method is different from ``self.values()`` in that
-        it takes care of the slicing offset as well as null elements backed
-        by non-empty sub-lists.
-
-        Parameters
-        ----------
-        memory_pool : pyarrow.MemoryPool, optional
-            If not passed, will allocate memory from the currently-set default
-            memory pool.
-
-        Returns
-        -------
-        result : Array
-        """
-        cdef:
-            shared_ptr[CArray] c_result_array
-            CMemoryPool* cpool = maybe_unbox_memory_pool(memory_pool)
-            CLargeListArray* arr = <CLargeListArray*> self.ap
-
-        with nogil:
-            c_result_array = GetResultValue(arr.Flatten(cpool))
-
-        return pyarrow_wrap_array(c_result_array)
+        return pyarrow_wrap_array((<CLargeListArray*> self.ap).offsets())
 
 
 cdef class MapArray(Array):
@@ -1613,11 +1659,13 @@ cdef class UnionArray(Array):
         -------
         union_array : UnionArray
         """
-        cdef shared_ptr[CArray] out
-        cdef vector[shared_ptr[CArray]] c
-        cdef Array child
-        cdef vector[c_string] c_field_names
-        cdef vector[int8_t] c_type_codes
+        cdef:
+            shared_ptr[CArray] out
+            vector[shared_ptr[CArray]] c
+            Array child
+            vector[c_string] c_field_names
+            vector[int8_t] c_type_codes
+
         for child in children:
             c.push_back(child.sp_array)
         if field_names is not None:
@@ -1626,10 +1674,12 @@ cdef class UnionArray(Array):
         if type_codes is not None:
             for x in type_codes:
                 c_type_codes.push_back(x)
+
         with nogil:
             out = GetResultValue(CDenseUnionArray.Make(
                 deref(types.ap), deref(value_offsets.ap), c, c_field_names,
                 c_type_codes))
+
         cdef Array result = pyarrow_wrap_array(out)
         result.validate()
         return result
@@ -1652,11 +1702,13 @@ cdef class UnionArray(Array):
         -------
         union_array : UnionArray
         """
-        cdef shared_ptr[CArray] out
-        cdef vector[shared_ptr[CArray]] c
-        cdef Array child
-        cdef vector[c_string] c_field_names
-        cdef vector[int8_t] c_type_codes
+        cdef:
+            shared_ptr[CArray] out
+            vector[shared_ptr[CArray]] c
+            Array child
+            vector[c_string] c_field_names
+            vector[int8_t] c_type_codes
+
         for child in children:
             c.push_back(child.sp_array)
         if field_names is not None:
@@ -1665,9 +1717,11 @@ cdef class UnionArray(Array):
         if type_codes is not None:
             for x in type_codes:
                 c_type_codes.push_back(x)
+
         with nogil:
             out = GetResultValue(CSparseUnionArray.Make(
                 deref(types.ap), c, c_field_names, c_type_codes))
+
         cdef Array result = pyarrow_wrap_array(out)
         result.validate()
         return result
@@ -1741,12 +1795,26 @@ cdef class BinaryArray(Array):
     """
     Concrete class for Arrow arrays of variable-sized binary data type.
     """
+    @property
+    def total_values_length(self):
+        """
+        The number of bytes from beginning to end of the data buffer addressed
+        by the offsets of this BinaryArray.
+        """
+        return (<CBinaryArray*> self.ap).total_values_length()
 
 
 cdef class LargeBinaryArray(Array):
     """
     Concrete class for Arrow arrays of large variable-sized binary data type.
     """
+    @property
+    def total_values_length(self):
+        """
+        The number of bytes from beginning to end of the data buffer addressed
+        by the offsets of this LargeBinaryArray.
+        """
+        return (<CLargeBinaryArray*> self.ap).total_values_length()
 
 
 cdef class DictionaryArray(Array):
@@ -2116,17 +2184,16 @@ def concat_arrays(arrays, MemoryPool memory_pool=None):
     """
     cdef:
         vector[shared_ptr[CArray]] c_arrays
-        shared_ptr[CArray] c_result
-        Array array
+        shared_ptr[CArray] c_concatenated
         CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
 
     for array in arrays:
-        c_arrays.push_back(array.sp_array)
+        c_arrays.push_back(pyarrow_unwrap_array(array))
 
     with nogil:
-        check_status(Concatenate(c_arrays, pool, &c_result))
+        c_concatenated = GetResultValue(Concatenate(c_arrays, pool))
 
-    return pyarrow_wrap_array(c_result)
+    return pyarrow_wrap_array(c_concatenated)
 
 
 def _empty_array(DataType type):

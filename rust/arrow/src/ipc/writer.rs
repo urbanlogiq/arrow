@@ -95,17 +95,17 @@ impl<W: Write> FileWriter<W> {
             let mut fields = vec![];
             for field in self.schema.fields() {
                 let fb_field_name = fbb.create_string(field.name().as_str());
-                let (ipc_type_type, ipc_type, ipc_children) =
+                let field_type =
                     ipc::convert::get_fb_field_type(field.data_type(), &mut fbb);
                 let mut field_builder = ipc::FieldBuilder::new(&mut fbb);
                 field_builder.add_name(fb_field_name);
-                field_builder.add_type_type(ipc_type_type);
+                field_builder.add_type_type(field_type.type_type);
                 field_builder.add_nullable(field.is_nullable());
-                match ipc_children {
+                match field_type.children {
                     None => {}
                     Some(children) => field_builder.add_children(children),
                 };
-                field_builder.add_type_(ipc_type);
+                field_builder.add_type_(field_type.type_);
                 fields.push(field_builder.finish());
             }
 
@@ -346,18 +346,22 @@ fn write_array_data(
 ) -> i64 {
     let mut offset = offset;
     nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
-    // write null buffer if exists
-    let null_buffer = match array_data.null_buffer() {
-        None => {
-            // create a buffer and fill it with valid bits
-            let num_bytes = bit_util::ceil(num_rows, 8);
-            let buffer = MutableBuffer::new(num_bytes);
-            let buffer = buffer.with_bitset(num_bytes, true);
-            buffer.freeze()
-        }
-        Some(buffer) => buffer.clone(),
-    };
-    offset = write_buffer(&null_buffer, &mut buffers, &mut arrow_data, offset);
+    // NullArray does not have any buffers, thus the null buffer is not generated
+    if array_data.data_type() != &DataType::Null {
+        // write null buffer if exists
+        let null_buffer = match array_data.null_buffer() {
+            None => {
+                // create a buffer and fill it with valid bits
+                let num_bytes = bit_util::ceil(num_rows, 8);
+                let buffer = MutableBuffer::new(num_bytes);
+                let buffer = buffer.with_bitset(num_bytes, true);
+                buffer.freeze()
+            }
+            Some(buffer) => buffer.clone(),
+        };
+
+        offset = write_buffer(&null_buffer, &mut buffers, &mut arrow_data, offset);
+    }
 
     array_data.buffers().iter().for_each(|buffer| {
         offset = write_buffer(buffer, &mut buffers, &mut arrow_data, offset);
@@ -464,16 +468,28 @@ mod tests {
                     });
             }
         }
-        // panic!("intentional failure");
     }
 
     #[test]
     fn test_write_null_file() {
-        let schema = Schema::new(vec![Field::new("nulls", DataType::Null, true)]);
+        let schema = Schema::new(vec![
+            Field::new("nulls", DataType::Null, true),
+            Field::new("int32s", DataType::Int32, false),
+            Field::new("nulls2", DataType::Null, false),
+            Field::new("f64s", DataType::Float64, false),
+        ]);
         let array1 = NullArray::new(32);
+        let array2 = Int32Array::from(vec![1; 32]);
+        let array3 = NullArray::new(32);
+        let array4 = Float64Array::from(vec![std::f64::NAN; 32]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(array1) as ArrayRef],
+            vec![
+                Arc::new(array1) as ArrayRef,
+                Arc::new(array2) as ArrayRef,
+                Arc::new(array3) as ArrayRef,
+                Arc::new(array4) as ArrayRef,
+            ],
         )
         .unwrap();
         {

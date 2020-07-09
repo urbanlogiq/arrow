@@ -25,13 +25,12 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::*;
-use crate::buffer::{Buffer, MutableBuffer};
+use crate::buffer::Buffer;
 use crate::compute::cast;
 use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef};
 use crate::error::{ArrowError, Result};
 use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchReader};
-use crate::util::bit_util;
 use DataType::*;
 
 const CONTINUATION_MARKER: u32 = 0xffff_ffff;
@@ -64,7 +63,7 @@ fn create_array(
 ) -> (ArrayRef, usize, usize) {
     use DataType::*;
     let array = match data_type {
-        Utf8 | Binary => {
+        Utf8 | Binary | LargeBinary | LargeUtf8 => {
             let array = create_primitive_array(
                 &nodes[node_index],
                 data_type,
@@ -90,7 +89,7 @@ fn create_array(
             buffer_index += 2;
             array
         }
-        List(ref list_data_type) => {
+        List(ref list_data_type) | LargeList(ref list_data_type) => {
             let list_node = &nodes[node_index];
             let list_buffers: Vec<Buffer> = buffers[buffer_index..buffer_index + 2]
                 .iter()
@@ -193,14 +192,6 @@ fn create_array(
             let length = nodes[node_index].length() as usize;
             let data = ArrayData::builder(data_type.clone())
                 .len(length)
-                .null_count(length)
-                .null_bit_buffer({
-                    // create a buffer and fill it with invalid bits
-                    let num_bytes = bit_util::ceil(length, 8);
-                    let buffer = MutableBuffer::new(num_bytes);
-                    let buffer = buffer.with_bitset(num_bytes, false);
-                    buffer.freeze()
-                })
                 .offset(0)
                 .build();
             node_index += 1;
@@ -234,7 +225,7 @@ fn create_primitive_array(
     let length = field_node.length() as usize;
     let null_count = field_node.null_count() as usize;
     let array_data = match data_type {
-        Utf8 | Binary => {
+        Utf8 | Binary | LargeBinary | LargeUtf8 => {
             // read 3 buffers
             let mut builder = ArrayData::builder(data_type.clone())
                 .len(length)
@@ -640,6 +631,7 @@ impl<R: Read + Seek> FileReader<R> {
     }
 
     /// Read the next record batch
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<RecordBatch>> {
         // get current block
         if self.current_block < self.total_blocks {
@@ -787,6 +779,7 @@ impl<R: Read> StreamReader<R> {
     }
 
     /// Read the next record batch
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<RecordBatch>> {
         if self.finished {
             return Ok(None);

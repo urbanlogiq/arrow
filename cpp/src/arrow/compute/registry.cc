@@ -102,17 +102,19 @@ static std::unique_ptr<FunctionRegistry> CreateBuiltInRegistry() {
   RegisterScalarBoolean(registry.get());
   RegisterScalarCast(registry.get());
   RegisterScalarComparison(registry.get());
+  RegisterScalarNested(registry.get());
   RegisterScalarSetLookup(registry.get());
   RegisterScalarStringAscii(registry.get());
+  RegisterScalarValidity(registry.get());
 
   // Aggregate functions
   RegisterScalarAggregateBasic(registry.get());
 
   // Vector functions
-  RegisterVectorFilter(registry.get());
   RegisterVectorHash(registry.get());
+  RegisterVectorSelection(registry.get());
+  RegisterVectorNested(registry.get());
   RegisterVectorSort(registry.get());
-  RegisterVectorTake(registry.get());
 
   return registry;
 }

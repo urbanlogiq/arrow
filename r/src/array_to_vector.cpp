@@ -19,15 +19,19 @@
 #if defined(ARROW_R_WITH_ARROW)
 
 #include <arrow/array.h>
+#include <arrow/builder.h>
+#include <arrow/datum.h>
 #include <arrow/table.h>
 #include <arrow/util/bitmap_reader.h>
 #include <arrow/util/bitmap_writer.h>
+#include <arrow/util/int_util.h>
 #include <arrow/util/parallel.h>
 #include <arrow/util/task_group.h>
 
 namespace arrow {
 
 using internal::checked_cast;
+using internal::IntegersCanFit;
 
 namespace r {
 
@@ -164,18 +168,26 @@ class Converter_SimpleArray : public Converter {
   }
 };
 
-class Converter_Date32 : public Converter_SimpleArray<INTSXP> {
+class Converter_Date32 : public Converter_SimpleArray<REALSXP> {
  public:
   explicit Converter_Date32(const ArrayVector& arrays)
-      : Converter_SimpleArray<INTSXP>(arrays) {}
+      : Converter_SimpleArray<REALSXP>(arrays) {}
 
   SEXP Allocate(R_xlen_t n) const {
-    IntegerVector data(no_init(n));
+    Rcpp::NumericVector data(no_init(n));
     data.attr("class") = "Date";
     return data;
   }
+
+  Status Ingest_some_nulls(SEXP data, const std::shared_ptr<arrow::Array>& array,
+                           R_xlen_t start, R_xlen_t n) const {
+    auto convert = [](int days) { return static_cast<double>(days); };
+    return SomeNull_Ingest<REALSXP, int>(data, start, n, array->data()->GetValues<int>(1),
+                                         array, convert);
+  }
 };
 
+template <typename StringArrayType>
 struct Converter_String : public Converter {
  public:
   explicit Converter_String(const ArrayVector& arrays) : Converter(arrays) {}
@@ -210,7 +222,7 @@ struct Converter_String : public Converter {
       return Status::OK();
     }
 
-    arrow::StringArray* string_array = static_cast<arrow::StringArray*>(array.get());
+    StringArrayType* string_array = static_cast<StringArrayType*>(array.get());
     if (array->null_count()) {
       // need to watch for nulls
       arrow::internal::BitmapReader null_reader(array->null_bitmap_data(),
@@ -275,6 +287,61 @@ class Converter_Boolean : public Converter {
   }
 };
 
+template <typename ArrayType>
+class Converter_Binary : public Converter {
+ public:
+  using offset_type = typename ArrayType::offset_type;
+  explicit Converter_Binary(const ArrayVector& arrays) : Converter(arrays) {}
+
+  SEXP Allocate(R_xlen_t n) const {
+    SEXP res = PROTECT(Rf_allocVector(VECSXP, n));
+    Rf_setAttrib(res, R_ClassSymbol, data::classes_vctrs_list_of);
+    Rf_setAttrib(res, symbols::ptype, data::empty_raw);
+    UNPROTECT(1);
+    return res;
+  }
+
+  Status Ingest_all_nulls(SEXP data, R_xlen_t start, R_xlen_t n) const {
+    return Status::OK();
+  }
+
+  Status Ingest_some_nulls(SEXP data, const std::shared_ptr<arrow::Array>& array,
+                           R_xlen_t start, R_xlen_t n) const {
+    const ArrayType* binary_array = checked_cast<const ArrayType*>(array.get());
+
+    auto ingest_one = [&](R_xlen_t i) {
+      offset_type ni;
+      auto value = binary_array->GetValue(i, &ni);
+      if (ni > R_XLEN_T_MAX) {
+        return Status::RError("Array too big to be represented as a raw vector");
+      }
+      SEXP raw = PROTECT(Rf_allocVector(RAWSXP, ni));
+      std::copy(value, value + ni, RAW(raw));
+
+      SET_VECTOR_ELT(data, i, raw);
+      UNPROTECT(1);
+
+      return Status::OK();
+    };
+
+    if (array->null_count()) {
+      internal::BitmapReader bitmap_reader(array->null_bitmap()->data(), array->offset(),
+                                           n);
+
+      for (R_xlen_t i = 0; i < n; i++, bitmap_reader.Next()) {
+        if (bitmap_reader.IsSet()) RETURN_NOT_OK(ingest_one(i));
+      }
+
+    } else {
+      for (R_xlen_t i = 0; i < n; i++) {
+        RETURN_NOT_OK(ingest_one(i));
+      }
+    }
+
+    return Status::OK();
+  }
+};
+
 class Converter_Dictionary : public Converter {
  public:
   explicit Converter_Dictionary(const ArrayVector& arrays) : Converter(arrays) {}
@@ -290,6 +357,7 @@ class Converter_Dictionary : public Converter {
       case Type::UINT16:
       case Type::INT16:
       case Type::INT32:
+        // TODO: also add int64, uint32, uint64 downcasts, if possible
         break;
       default:
         Rcpp::stop("Cannot convert Dictionary Array of type `%s` to R",
@@ -380,8 +448,9 @@ class Converter_Struct : public Converter {
     Rcpp::CharacterVector colnames(nf);
     for (int i = 0; i < nf; i++) {
       out[i] = converters[i]->Allocate(n);
-      colnames[i] = type->field(i)->name();
+      colnames[i] = Rcpp::String(type->field(i)->name(), CE_UTF8);
     }
+
     IntegerVector rn(2);
     rn[0] = NA_INTEGER;
     rn[1] = -n;
@@ -418,7 +487,7 @@ class Converter_Struct : public Converter {
   std::vector<std::shared_ptr<Converter>> converters;
 };
 
-double ms_to_seconds(int64_t ms) { return static_cast<double>(ms / 1000); }
+double ms_to_seconds(int64_t ms) { return static_cast<double>(ms) / 1000; }
 
 class Converter_Date64 : public Converter {
  public:
@@ -479,6 +548,7 @@ class Converter_Time : public Converter {
   SEXP Allocate(R_xlen_t n) const {
     Rcpp::NumericVector data(no_init(n));
     data.attr("class") = Rcpp::CharacterVector::create("hms", "difftime");
+    // hms difftime is always stored as "seconds"
     data.attr("units") = Rcpp::CharacterVector::create("secs");
     return data;
   }
@@ -499,6 +569,7 @@ class Converter_Time : public Converter {
 
  private:
   int TimeUnit_multiplier(const std::shared_ptr<Array>& array) const {
+    // hms difftime is always "seconds", so multiply based on the Array's TimeUnit
     switch (static_cast<unit_type*>(array->type().get())->unit()) {
       case TimeUnit::SECOND:
         return 1;
@@ -525,7 +596,10 @@ class Converter_Timestamp : public Converter_Time<value_type, TimestampType> {
     Rf_classgets(data, arrow::r::data::classes_POSIXct);
     auto array = checked_cast<const TimestampArray*>(this->arrays_[0].get());
     auto array_type = checked_cast<const TimestampType*>(array->type().get());
-    data.attr("tzone") = array_type->timezone();
+    std::string tzone = array_type->timezone();
+    if (tzone.size() > 0) {
+      data.attr("tzone") = tzone;
+    }
     return data;
   }
 };
@@ -563,11 +637,33 @@ class Converter_Decimal : public Converter {
   }
 };
 
+template <typename ListArrayType>
 class Converter_List : public Converter {
- public:
-  explicit Converter_List(const ArrayVector& arrays) : Converter(arrays) {}
+ private:
+  std::shared_ptr<arrow::DataType> value_type_;
 
-  SEXP Allocate(R_xlen_t n) const { return Rcpp::List(no_init(n)); }
+ public:
+  explicit Converter_List(const ArrayVector& arrays,
+                          const std::shared_ptr<arrow::DataType>& value_type)
+      : Converter(arrays), value_type_(value_type) {}
+
+  SEXP Allocate(R_xlen_t n) const {
+    Rcpp::List res(no_init(n));
+    Rf_setAttrib(res, R_ClassSymbol, arrow::r::data::classes_vctrs_list_of);
+
+    // Build an empty array to match value_type
+    std::unique_ptr<arrow::ArrayBuilder> builder;
+    StopIfNotOk(arrow::MakeBuilder(arrow::default_memory_pool(), value_type_, &builder));
+
+    std::shared_ptr<arrow::Array> array;
+    StopIfNotOk(builder->Finish(&array));
+
+    // convert to an R object to store as the list' ptype
+    SEXP ptype = Array__as_vector(array);
+    Rf_setAttrib(res, arrow::r::symbols::ptype, ptype);
+
+    return res;
+  }
 
   Status Ingest_all_nulls(SEXP data, R_xlen_t start, R_xlen_t n) const {
     // nothing to do, list contain NULL by default
@@ -576,7 +672,7 @@ class Converter_List : public Converter {
 
   Status Ingest_some_nulls(SEXP data, const std::shared_ptr<arrow::Array>& array,
                            R_xlen_t start, R_xlen_t n) const {
-    auto list_array = checked_cast<const arrow::ListArray*>(array.get());
+    auto list_array = checked_cast<const ListArrayType*>(array.get());
     auto values_array = list_array->values();
 
     auto ingest_one = [&](R_xlen_t i) {
@@ -663,6 +759,17 @@ class Converter_Null : public Converter {
   }
 };
 
+bool ArraysCanFitInteger(ArrayVector arrays) {
+  bool out = false;
+  auto i32 = arrow::int32();
+  for (const auto& array : arrays) {
+    if (!out) {
+      out = arrow::IntegersCanFit(arrow::Datum(array), *i32).ok();
+    }
+  }
+  return out;
+}
+
 std::shared_ptr<Converter> Converter::Make(const std::shared_ptr<DataType>& type,
                                            ArrayVector arrays) {
   if (arrays.empty()) {
@@ -684,9 +791,22 @@ std::shared_ptr<Converter> Converter::Make(const std::shared_ptr<DataType>& type
     case Type::BOOL:
       return std::make_shared<arrow::r::Converter_Boolean>(std::move(arrays));
 
+    case Type::BINARY:
+      return std::make_shared<arrow::r::Converter_Binary<arrow::BinaryArray>>(
+          std::move(arrays));
+
+    case Type::LARGE_BINARY:
+      return std::make_shared<arrow::r::Converter_Binary<arrow::LargeBinaryArray>>(
+          std::move(arrays));
+
       // handle memory dense strings
     case Type::STRING:
-      return std::make_shared<arrow::r::Converter_String>(std::move(arrays));
+      return std::make_shared<arrow::r::Converter_String<arrow::StringArray>>(
+          std::move(arrays));
+
+    case Type::LARGE_STRING:
+      return std::make_shared<arrow::r::Converter_String<arrow::LargeStringArray>>(
+          std::move(arrays));
 
     case Type::DICTIONARY:
       return std::make_shared<arrow::r::Converter_Dictionary>(std::move(arrays));
@@ -714,10 +834,24 @@ std::shared_ptr<Converter> Converter::Make(const std::shared_ptr<DataType>& type
       return std::make_shared<arrow::r::Converter_Promotion<INTSXP, arrow::UInt16Type>>(
           std::move(arrays));
 
-      // promotions to numeric vector
+      // promotions to numeric vector, if they don't fit into int32
     case Type::UINT32:
-      return std::make_shared<arrow::r::Converter_Promotion<REALSXP, arrow::UInt32Type>>(
-          std::move(arrays));
+      if (ArraysCanFitInteger(arrays)) {
+        return std::make_shared<arrow::r::Converter_Promotion<INTSXP, arrow::UInt32Type>>(
+            std::move(arrays));
+      } else {
+        return std::make_shared<
+            arrow::r::Converter_Promotion<REALSXP, arrow::UInt32Type>>(std::move(arrays));
+      }
+
+    case Type::UINT64:
+      if (ArraysCanFitInteger(arrays)) {
+        return std::make_shared<arrow::r::Converter_Promotion<INTSXP, arrow::UInt64Type>>(
+            std::move(arrays));
+      } else {
+        return std::make_shared<
+            arrow::r::Converter_Promotion<REALSXP, arrow::UInt64Type>>(std::move(arrays));
+      }
 
     case Type::HALF_FLOAT:
       return std::make_shared<
@@ -728,7 +862,7 @@ std::shared_ptr<Converter> Converter::Make(const std::shared_ptr<DataType>& type
       return std::make_shared<arrow::r::Converter_Promotion<REALSXP, arrow::FloatType>>(
           std::move(arrays));
 
-      // time32 ane time64
+      // time32 and time64
     case Type::TIME32:
       return std::make_shared<arrow::r::Converter_Time<int32_t>>(std::move(arrays));
 
@@ -739,7 +873,13 @@ std::shared_ptr<Converter> Converter::Make(const std::shared_ptr<DataType>& type
       return std::make_shared<arrow::r::Converter_Timestamp<int64_t>>(std::move(arrays));
 
     case Type::INT64:
-      return std::make_shared<arrow::r::Converter_Int64>(std::move(arrays));
+      // Prefer integer if it fits
+      if (ArraysCanFitInteger(arrays)) {
+        return std::make_shared<arrow::r::Converter_Promotion<INTSXP, arrow::Int64Type>>(
+            std::move(arrays));
+      } else {
+        return std::make_shared<arrow::r::Converter_Int64>(std::move(arrays));
+      }
 
     case Type::DECIMAL:
       return std::make_shared<arrow::r::Converter_Decimal>(std::move(arrays));
@@ -749,7 +889,14 @@ std::shared_ptr<Converter> Converter::Make(const std::shared_ptr<DataType>& type
       return std::make_shared<arrow::r::Converter_Struct>(std::move(arrays));
 
     case Type::LIST:
-      return std::make_shared<arrow::r::Converter_List>(std::move(arrays));
+      return std::make_shared<arrow::r::Converter_List<arrow::ListArray>>(
+          std::move(arrays),
+          checked_cast<const arrow::ListType*>(type.get())->value_type());
+
+    case Type::LARGE_LIST:
+      return std::make_shared<arrow::r::Converter_List<arrow::LargeListArray>>(
+          std::move(arrays),
+          checked_cast<const arrow::LargeListType*>(type.get())->value_type());
 
     case Type::NA:
       return std::make_shared<arrow::r::Converter_Null>(std::move(arrays));
@@ -843,7 +990,7 @@ Rcpp::List RecordBatch__to_dataframe(const std::shared_ptr<arrow::RecordBatch>& 
   std::vector<std::shared_ptr<arrow::r::Converter>> converters(nc);
 
   for (int64_t i = 0; i < nc; i++) {
-    names[i] = batch->column_name(i);
+    names[i] = Rcpp::String(batch->column_name(i), CE_UTF8);
     arrays[i] = {batch->column(i)};
     converters[i] = arrow::r::Converter::Make(batch->column(i)->type(), arrays[i]);
   }
@@ -866,7 +1013,7 @@ Rcpp::List Table__to_dataframe(const std::shared_ptr<arrow::Table>& table,
   for (int64_t i = 0; i < nc; i++) {
     converters[i] =
         arrow::r::Converter::Make(table->column(i)->type(), table->column(i)->chunks());
-    names[i] = table->field(i)->name();
+    names[i] = Rcpp::String(table->field(i)->name(), CE_UTF8);
   }
 
   if (use_threads) {

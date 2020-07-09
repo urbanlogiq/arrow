@@ -36,14 +36,27 @@ namespace arrow {
 
 using internal::CountSetBits;
 
+static inline void AdjustNonNullable(Type::type type_id,
+                                     std::vector<std::shared_ptr<Buffer>>* buffers,
+                                     int64_t* null_count) {
+  if (internal::HasValidityBitmap(type_id)) {
+    if (*null_count == 0) {
+      // In case there are no nulls, don't keep an allocated null bitmap around
+      (*buffers)[0] = nullptr;
+    } else if (*null_count == kUnknownNullCount && buffers->at(0) == nullptr) {
+      // Conversely, if no null bitmap is provided, set the null count to 0
+      *null_count = 0;
+    }
+  } else {
+    *null_count = 0;
+  }
+}
+
 std::shared_ptr<ArrayData> ArrayData::Make(const std::shared_ptr<DataType>& type,
                                            int64_t length,
                                            std::vector<std::shared_ptr<Buffer>> buffers,
                                            int64_t null_count, int64_t offset) {
-  // In case there are no nulls, don't keep an allocated null bitmap around
-  if (buffers.size() > 0 && null_count == 0) {
-    buffers[0] = nullptr;
-  }
+  AdjustNonNullable(type->id(), &buffers, &null_count);
   return std::make_shared<ArrayData>(type, length, std::move(buffers), null_count,
                                      offset);
 }
@@ -53,10 +66,7 @@ std::shared_ptr<ArrayData> ArrayData::Make(
     std::vector<std::shared_ptr<Buffer>> buffers,
     std::vector<std::shared_ptr<ArrayData>> child_data, int64_t null_count,
     int64_t offset) {
-  // In case there are no nulls, don't keep an allocated null bitmap around
-  if (buffers.size() > 0 && null_count == 0) {
-    buffers[0] = nullptr;
-  }
+  AdjustNonNullable(type->id(), &buffers, &null_count);
   return std::make_shared<ArrayData>(type, length, std::move(buffers),
                                      std::move(child_data), null_count, offset);
 }
@@ -66,9 +76,7 @@ std::shared_ptr<ArrayData> ArrayData::Make(
     std::vector<std::shared_ptr<Buffer>> buffers,
     std::vector<std::shared_ptr<ArrayData>> child_data,
     std::shared_ptr<ArrayData> dictionary, int64_t null_count, int64_t offset) {
-  if (buffers.size() > 0 && null_count == 0) {
-    buffers[0] = nullptr;
-  }
+  AdjustNonNullable(type->id(), &buffers, &null_count);
   auto data = std::make_shared<ArrayData>(type, length, std::move(buffers),
                                           std::move(child_data), null_count, offset);
   data->dictionary = std::move(dictionary);
@@ -81,18 +89,18 @@ std::shared_ptr<ArrayData> ArrayData::Make(const std::shared_ptr<DataType>& type
   return std::make_shared<ArrayData>(type, length, null_count, offset);
 }
 
-ArrayData ArrayData::Slice(int64_t off, int64_t len) const {
+std::shared_ptr<ArrayData> ArrayData::Slice(int64_t off, int64_t len) const {
   ARROW_CHECK_LE(off, length) << "Slice offset greater than array length";
   len = std::min(length - off, len);
   off += offset;
 
-  auto copy = *this;
-  copy.length = len;
-  copy.offset = off;
+  auto copy = this->Copy();
+  copy->length = len;
+  copy->offset = off;
   if (null_count == length) {
-    copy.null_count = len;
+    copy->null_count = len;
   } else {
-    copy.null_count = null_count != 0 ? kUnknownNullCount : 0;
+    copy->null_count = null_count != 0 ? kUnknownNullCount : 0;
   }
   return copy;
 }
@@ -212,18 +220,10 @@ struct ViewDataImpl {
     // No type has a purely empty layout
     DCHECK_GT(out_layout.buffers.size(), 0);
 
-    if (out_layout.buffers[0].kind == DataTypeLayout::ALWAYS_NULL) {
-      // Assuming null type or equivalent.
-      DCHECK_EQ(out_layout.buffers.size(), 1);
-      *out = ArrayData::Make(out_type, out_length, {nullptr}, out_length);
-      return Status::OK();
-    }
-
     std::vector<std::shared_ptr<Buffer>> out_buffers;
 
     // Process null bitmap
-    DCHECK_EQ(out_layout.buffers[0].kind, DataTypeLayout::BITMAP);
-    if (in_buffer_idx == 0) {
+    if (in_buffer_idx == 0 && out_layout.buffers[0].kind == DataTypeLayout::BITMAP) {
       // Copy input null bitmap
       RETURN_NOT_OK(CheckInputAvailable());
       const auto& in_data_item = in_data[in_layout_idx];

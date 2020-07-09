@@ -42,7 +42,9 @@ def test_total_bytes_allocated():
 
 def test_getitem_NULL():
     arr = pa.array([1, None, 2])
-    assert arr[1] is pa.NULL
+    assert arr[1].as_py() is None
+    assert arr[1].is_valid is False
+    assert isinstance(arr[1], pa.Int64Scalar)
 
 
 def test_constructor_raises():
@@ -108,6 +110,18 @@ def test_binary_format():
   80FF
 ]"""
     assert result == expected
+
+
+def test_binary_total_values_length():
+    arr = pa.array([b'0000', None, b'11111', b'222222', b'3333333'],
+                   type='binary')
+    large_arr = pa.array([b'0000', None, b'11111', b'222222', b'3333333'],
+                         type='large_binary')
+
+    assert arr.total_values_length == 22
+    assert arr.slice(1, 3).total_values_length == 11
+    assert large_arr.total_values_length == 22
+    assert large_arr.slice(1, 3).total_values_length == 11
 
 
 def test_to_numpy_zero_copy():
@@ -264,6 +278,25 @@ def test_asarray():
     assert np_arr.tolist() == ['a', 'b', 'c', 'a', 'b']
 
 
+@pytest.mark.parametrize('ty', [
+    None,
+    pa.null(),
+    pa.int8(),
+    pa.string()
+])
+def test_nulls(ty):
+    arr = pa.nulls(3, type=ty)
+    expected = pa.array([None, None, None], type=ty)
+
+    assert len(arr) == 3
+    assert arr.equals(expected)
+
+    if ty is None:
+        assert arr.type == pa.null()
+    else:
+        assert arr.type == ty
+
+
 def test_array_getitem():
     arr = pa.array(range(10, 15))
     lst = arr.to_pylist()
@@ -363,7 +396,7 @@ def test_array_iter():
     arr = pa.array(range(10))
 
     for i, j in zip(range(10), arr):
-        assert i == j
+        assert i == j.as_py()
 
     assert isinstance(arr, Iterable)
 
@@ -555,7 +588,7 @@ def test_dictionary_from_numpy():
         assert d1[i].as_py() == dictionary[indices[i]]
 
         if mask[i]:
-            assert d2[i] is pa.NULL
+            assert d2[i].as_py() is None
         else:
             assert d2[i].as_py() == dictionary[indices[i]]
 
@@ -1035,8 +1068,7 @@ def test_floating_point_truncate_unsafe():
     ]
     for case in unsafe_cases:
         # test safe casting raises
-        with pytest.raises(pa.ArrowInvalid,
-                           match='Floating point value truncated'):
+        with pytest.raises(pa.ArrowInvalid, match='truncated'):
             _check_cast_case(case, safe=True)
 
         # test unsafe casting truncates
@@ -1172,8 +1204,7 @@ def test_decimal_to_decimal():
 def test_safe_cast_nan_to_int_raises():
     arr = pa.array([np.nan, 1.])
 
-    with pytest.raises(pa.ArrowInvalid,
-                       match='Floating point value truncated'):
+    with pytest.raises(pa.ArrowInvalid, match='truncated'):
         arr.cast(pa.int64(), safe=True)
 
 
@@ -1299,6 +1330,21 @@ def test_value_counts_simple():
             assert result.field("counts").equals(expected_counts)
 
 
+def test_unique_value_counts_dictionary_type():
+    indices = pa.array([3, 0, 0, 0, 1, 1, 3, 0, 1, 3, 0, 1])
+    dictionary = pa.array(['foo', 'bar', 'baz', 'qux'])
+
+    arr = pa.DictionaryArray.from_arrays(indices, dictionary)
+
+    unique_result = arr.unique()
+    expected = pa.DictionaryArray.from_arrays(indices.unique(), dictionary)
+    assert unique_result.equals(expected)
+
+    result = arr.value_counts()
+    result.field('values').equals(unique_result)
+    result.field('counts').equals(pa.array([3, 5, 4], type='int64'))
+
+
 def test_dictionary_encode_simple():
     cases = [
         (pa.array([1, 2, 3, None, 1, 2, 3]),
@@ -1351,6 +1397,10 @@ def test_dictionary_encode_sliced():
         result = pa.chunked_array([], type=arr.type).dictionary_encode()
         assert result.num_chunks == 0
         assert result.type == expected.type
+
+    # ARROW-9143 dictionary_encode after slice was segfaulting
+    array = pa.array(['foo', 'bar', 'baz'])
+    array.slice(1).dictionary_encode()
 
 
 def test_dictionary_encode_zero_length():
@@ -1901,6 +1951,13 @@ def test_array_from_strided_bool():
     assert result.equals(expected)
 
 
+def test_boolean_true_count_false_count():
+    # ARROW-9145
+    arr = pa.array([True, True, None, False, None, True] * 1000)
+    assert arr.true_count == 3000
+    assert arr.false_count == 1000
+
+
 def test_buffers_primitive():
     a = pa.array([1, 2, None, 4], type=pa.int16())
     buffers = a.buffers()
@@ -2050,6 +2107,34 @@ def test_list_array_flatten(offset_type, list_type_factory):
     assert arr1.values.equals(arr0)
     assert arr2.flatten().flatten().equals(arr0)
     assert arr2.values.values.equals(arr0)
+
+
+@pytest.mark.parametrize(('offset_type', 'list_type_factory'),
+                         [(pa.int32(), pa.list_), (pa.int64(), pa.large_list)])
+def test_list_value_parent_indices(offset_type, list_type_factory):
+    arr = pa.array(
+        [
+            [0, 1, 2],
+            None,
+            [],
+            [3, 4]
+        ], type=list_type_factory(pa.int32()))
+    expected = pa.array([0, 0, 0, 3, 3], type=offset_type)
+    assert arr.value_parent_indices().equals(expected)
+
+
+@pytest.mark.parametrize(('offset_type', 'list_type_factory'),
+                         [(pa.int32(), pa.list_), (pa.int64(), pa.large_list)])
+def test_list_value_lengths(offset_type, list_type_factory):
+    arr = pa.array(
+        [
+            [0, 1, 2],
+            None,
+            [],
+            [3, 4]
+        ], type=list_type_factory(pa.int32()))
+    expected = pa.array([3, None, 0, 2], type=offset_type)
+    assert arr.value_lengths().equals(expected)
 
 
 @pytest.mark.parametrize('list_type_factory', [pa.list_, pa.large_list])

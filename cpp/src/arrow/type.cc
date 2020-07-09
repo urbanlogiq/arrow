@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "arrow/array.h"
+#include "arrow/chunked_array.h"
 #include "arrow/compare.h"
 #include "arrow/record_batch.h"
 #include "arrow/result.h"
@@ -182,6 +183,11 @@ std::string ToString(TimeUnit::type unit) {
       DCHECK(false);
       return "";
   }
+}
+
+int GetByteWidth(const DataType& type) {
+  const auto& fw_type = checked_cast<const FixedWidthType&>(type);
+  return fw_type.bit_width() / CHAR_BIT;
 }
 
 }  // namespace internal
@@ -592,9 +598,9 @@ Status UnionType::ValidateParameters(const std::vector<std::shared_ptr<Field>>& 
 DataTypeLayout UnionType::layout() const {
   if (mode() == UnionMode::SPARSE) {
     return DataTypeLayout(
-        {DataTypeLayout::Bitmap(), DataTypeLayout::FixedWidth(sizeof(uint8_t))});
+        {DataTypeLayout::AlwaysNull(), DataTypeLayout::FixedWidth(sizeof(uint8_t))});
   } else {
-    return DataTypeLayout({DataTypeLayout::Bitmap(),
+    return DataTypeLayout({DataTypeLayout::AlwaysNull(),
                            DataTypeLayout::FixedWidth(sizeof(uint8_t)),
                            DataTypeLayout::FixedWidth(sizeof(int32_t))});
   }
@@ -755,10 +761,8 @@ Result<std::shared_ptr<DataType>> Decimal128Type::Make(int32_t precision, int32_
 
 Status DictionaryType::ValidateParameters(const DataType& index_type,
                                           const DataType& value_type) {
-  const bool index_type_ok = is_integer(index_type.id()) &&
-                             checked_cast<const IntegerType&>(index_type).is_signed();
-  if (!index_type_ok) {
-    return Status::TypeError("Dictionary index type should be signed integer, got ",
+  if (!is_integer(index_type.id())) {
+    return Status::TypeError("Dictionary index type should be integer, got ",
                              index_type.ToString());
   }
   return Status::OK();
@@ -1210,6 +1214,22 @@ std::vector<FieldPath> FieldRef::FindAll(const FieldVector& fields) const {
   };
 
   return util::visit(Visitor{fields}, impl_);
+}
+
+std::vector<FieldPath> FieldRef::FindAll(const Array& array) const {
+  return FindAll(*array.type());
+}
+
+std::vector<FieldPath> FieldRef::FindAll(const ChunkedArray& array) const {
+  return FindAll(*array.type());
+}
+
+std::vector<FieldPath> FieldRef::FindAll(const RecordBatch& batch) const {
+  return FindAll(*batch.schema());
+}
+
+std::vector<FieldPath> FieldRef::FindAll(const Table& table) const {
+  return FindAll(*table.schema());
 }
 
 void PrintTo(const FieldRef& ref, std::ostream* os) { *os << ref.ToString(); }

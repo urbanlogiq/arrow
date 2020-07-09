@@ -111,7 +111,7 @@ def test_chunked_array_iter():
     arr = pa.chunked_array(data)
 
     for i, j in zip(range(10), arr):
-        assert i == j
+        assert i == j.as_py()
 
     assert isinstance(arr, Iterable)
 
@@ -1059,8 +1059,7 @@ def test_table_unsafe_casting():
         pa.field('d', pa.string())
     ])
 
-    with pytest.raises(pa.ArrowInvalid,
-                       match='Floating point value truncated'):
+    with pytest.raises(pa.ArrowInvalid, match='truncated'):
         table.cast(target_schema)
 
     casted_table = table.cast(target_schema, safe=False)

@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 import pyarrow as pa
-import pyarrow.compute
+import pyarrow.compute as pc
 
 
 all_array_types = [
@@ -59,35 +59,40 @@ numerical_arrow_types = [
 @pytest.mark.parametrize('arrow_type', numerical_arrow_types)
 def test_sum_array(arrow_type):
     arr = pa.array([1, 2, 3, 4], type=arrow_type)
-    assert arr.sum() == 10
-    assert pa.compute.sum(arr) == 10
+    assert arr.sum().as_py() == 10
+    assert pc.sum(arr).as_py() == 10
 
     arr = pa.array([], type=arrow_type)
-    assert arr.sum() == None  # noqa: E711
-    assert pa.compute.sum(arr) == None  # noqa: E711
+    assert arr.sum().as_py() is None  # noqa: E711
 
 
 @pytest.mark.parametrize('arrow_type', numerical_arrow_types)
 def test_sum_chunked_array(arrow_type):
     arr = pa.chunked_array([pa.array([1, 2, 3, 4], type=arrow_type)])
-    assert pa.compute.sum(arr) == 10
+    assert pc.sum(arr).as_py() == 10
 
     arr = pa.chunked_array([
         pa.array([1, 2], type=arrow_type), pa.array([3, 4], type=arrow_type)
     ])
-    assert pa.compute.sum(arr) == 10
+    assert pc.sum(arr).as_py() == 10
 
     arr = pa.chunked_array([
         pa.array([1, 2], type=arrow_type),
         pa.array([], type=arrow_type),
         pa.array([3, 4], type=arrow_type)
     ])
-    assert pa.compute.sum(arr) == 10
+    assert pc.sum(arr).as_py() == 10
 
     arr = pa.chunked_array((), type=arrow_type)
-    print(arr, type(arr))
     assert arr.num_chunks == 0
-    assert pa.compute.sum(arr) == None  # noqa: E711
+    assert pc.sum(arr).as_py() is None  # noqa: E711
+
+
+def test_binary_contains_exact():
+    arr = pa.array(["ab", "abc", "ba", None])
+    result = pc.binary_contains_exact(arr, "ab")
+    expected = pa.array([True, True, False, None])
+    assert expected.equals(result)
 
 
 @pytest.mark.parametrize(('ty', 'values'), all_array_types)
@@ -158,7 +163,7 @@ def test_filter(ty, values):
 
     # non-boolean dtype
     mask = pa.array([0, 1, 0, 1, 0])
-    with pytest.raises(NotImplementedError, match="no kernel matching"):
+    with pytest.raises(NotImplementedError):
         arr.filter(mask)
 
     # wrong length
@@ -229,8 +234,7 @@ def test_filter_errors():
     for obj in [arr, batch, table]:
         # non-boolean dtype
         mask = pa.array([0, 1, 0, 1, 0])
-        with pytest.raises(NotImplementedError,
-                           match="no kernel matching input types"):
+        with pytest.raises(NotImplementedError):
             obj.filter(mask)
 
         # wrong length
@@ -300,7 +304,6 @@ def test_compare_scalar(typ):
 
 
 def test_compare_chunked_array_mixed():
-
     arr = pa.array([1, 2, 3, 4, None])
     arr_chunked = pa.chunked_array([[1, 2, 3], [4, None]])
     arr_chunked2 = pa.chunked_array([[1, 2], [3, 4, None]])
@@ -313,3 +316,48 @@ def test_compare_chunked_array_mixed():
         arr_chunked == arr_chunked2,
     ]:
         assert result.equals(expected)
+
+
+def test_arithmetic_add():
+    left = pa.array([1, 2, 3, 4, 5])
+    right = pa.array([0, -1, 1, 2, 3])
+    result = pc.add(left, right)
+    expected = pa.array([1, 1, 4, 6, 8])
+    assert result.equals(expected)
+
+
+def test_arithmetic_subtract():
+    left = pa.array([1, 2, 3, 4, 5])
+    right = pa.array([0, -1, 1, 2, 3])
+    result = pc.subtract(left, right)
+    expected = pa.array([1, 3, 2, 2, 2])
+    assert result.equals(expected)
+
+
+def test_arithmetic_multiply():
+    left = pa.array([1, 2, 3, 4, 5])
+    right = pa.array([0, -1, 1, 2, 3])
+    result = pc.multiply(left, right)
+    expected = pa.array([0, -2, 3, 8, 15])
+    assert result.equals(expected)
+
+
+def test_is_null():
+    arr = pa.array([1, 2, 3, None])
+    result = arr.is_null()
+    result = arr.is_null()
+    expected = pa.array([False, False, False, True])
+    assert result.equals(expected)
+    assert result.equals(pc.is_null(arr))
+    result = arr.is_valid()
+    expected = pa.array([True, True, True, False])
+    assert result.equals(expected)
+    assert result.equals(pc.is_valid(arr))
+
+    arr = pa.chunked_array([[1, 2], [3, None]])
+    result = arr.is_null()
+    expected = pa.chunked_array([[False, False], [False, True]])
+    assert result.equals(expected)
+    result = arr.is_valid()
+    expected = pa.chunked_array([[True, True], [True, False]])
+    assert result.equals(expected)

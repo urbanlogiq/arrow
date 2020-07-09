@@ -157,6 +157,8 @@ TEST_F(TestArray, TestEquality) {
   // ARROW-2567: Ensure that not only the type id but also the type equality
   // itself is checked.
   ASSERT_FALSE(timestamp_us_array->Equals(timestamp_ns_array));
+  ASSERT_TRUE(timestamp_us_array->RangeEquals(0, 1, 0, timestamp_us_array));
+  ASSERT_FALSE(timestamp_us_array->RangeEquals(0, 1, 0, timestamp_ns_array));
 }
 
 TEST_F(TestArray, TestNullArrayEquality) {
@@ -288,7 +290,6 @@ TEST_F(TestArray, TestMakeArrayOfNull) {
       decimal(16, 4),
       utf8(),
       large_utf8(),
-
       list(utf8()),
       list(int64()),  // ARROW-9071
       large_list(large_utf8()),
@@ -296,8 +297,6 @@ TEST_F(TestArray, TestMakeArrayOfNull) {
       fixed_size_list(int64(), 4),
       dictionary(int32(), utf8()),
       struct_({field("a", utf8()), field("b", int32())}),
-      sparse_union({field("a", utf8()), field("b", int32())}, {0, 1}),
-      dense_union({field("a", utf8()), field("b", int32())}, {0, 1}),
       // clang-format on
   };
 
@@ -311,22 +310,69 @@ TEST_F(TestArray, TestMakeArrayOfNull) {
   }
 }
 
+TEST_F(TestArray, TestMakeArrayOfNullUnion) {
+  // Unions need special checking -- the top level null count is 0 (per
+  // ARROW-9222) so we check the first child to make sure is contains all nulls
+  // and check that the type_ids all point to the first child
+  const int64_t union_length = 10;
+  auto s_union_ty = sparse_union({field("a", utf8()), field("b", int32())}, {0, 1});
+  ASSERT_OK_AND_ASSIGN(auto s_union_nulls, MakeArrayOfNull(s_union_ty, union_length));
+  ASSERT_EQ(s_union_nulls->null_count(), 0);
+  {
+    const auto& typed_union = checked_cast<const SparseUnionArray&>(*s_union_nulls);
+    ASSERT_EQ(typed_union.field(0)->null_count(), union_length);
+
+    // Check type codes are all 0
+    for (int i = 0; i < union_length; ++i) {
+      ASSERT_EQ(typed_union.raw_type_codes()[i], 0);
+    }
+  }
+
+  auto d_union_ty = dense_union({field("a", utf8()), field("b", int32())}, {0, 1});
+  ASSERT_OK_AND_ASSIGN(auto d_union_nulls, MakeArrayOfNull(d_union_ty, union_length));
+  ASSERT_EQ(d_union_nulls->null_count(), 0);
+  {
+    const auto& typed_union = checked_cast<const DenseUnionArray&>(*d_union_nulls);
+
+    // Child field has length 1 which is a null element
+    ASSERT_EQ(typed_union.field(0)->length(), 1);
+    ASSERT_EQ(typed_union.field(0)->null_count(), 1);
+
+    // Check type codes are all 0 and the offsets point to the first element of
+    // the first child
+    for (int i = 0; i < union_length; ++i) {
+      ASSERT_EQ(typed_union.raw_type_codes()[i], 0);
+      ASSERT_EQ(typed_union.raw_value_offsets()[i], 0);
+    }
+  }
+}
+
 TEST_F(TestArray, TestMakeArrayFromScalar) {
+  ASSERT_OK_AND_ASSIGN(auto null_array, MakeArrayFromScalar(NullScalar(), 5));
+  ASSERT_OK(null_array->ValidateFull());
+  ASSERT_EQ(null_array->length(), 5);
+  ASSERT_EQ(null_array->null_count(), 5);
+
   auto hello = Buffer::FromString("hello");
-  std::shared_ptr<Scalar> scalars[] = {
-      std::make_shared<BooleanScalar>(false),
-      std::make_shared<Int8Scalar>(3),
-      std::make_shared<UInt16Scalar>(3),
-      std::make_shared<Int32Scalar>(3),
-      std::make_shared<UInt64Scalar>(3),
-      std::make_shared<DoubleScalar>(3.0),
-      std::make_shared<BinaryScalar>(hello),
-      std::make_shared<LargeBinaryScalar>(hello),
-      std::make_shared<FixedSizeBinaryScalar>(
-          hello, fixed_size_binary(static_cast<int32_t>(hello->size()))),
-      std::make_shared<Decimal128Scalar>(Decimal128(10), decimal(16, 4)),
-      std::make_shared<StringScalar>(hello),
-      std::make_shared<LargeStringScalar>(hello)};
+  ScalarVector scalars{std::make_shared<BooleanScalar>(false),
+                       std::make_shared<Int8Scalar>(3),
+                       std::make_shared<UInt16Scalar>(3),
+                       std::make_shared<Int32Scalar>(3),
+                       std::make_shared<UInt64Scalar>(3),
+                       std::make_shared<DoubleScalar>(3.0),
+                       std::make_shared<BinaryScalar>(hello),
+                       std::make_shared<LargeBinaryScalar>(hello),
+                       std::make_shared<FixedSizeBinaryScalar>(
+                           hello, fixed_size_binary(static_cast<int32_t>(hello->size()))),
+                       std::make_shared<Decimal128Scalar>(Decimal128(10), decimal(16, 4)),
+                       std::make_shared<StringScalar>(hello),
+                       std::make_shared<LargeStringScalar>(hello),
+                       std::make_shared<StructScalar>(
+                           ScalarVector{
+                               std::make_shared<Int32Scalar>(2),
+                               std::make_shared<Int32Scalar>(6),
+                           },
+                           struct_({field("min", int32()), field("max", int32())}))};
 
   for (int64_t length : {16}) {
     for (auto scalar : scalars) {
@@ -363,7 +409,7 @@ TEST_F(TestArray, ValidateBuffersPrimitive) {
   array = MakeArray(data);
   ASSERT_RAISES(Invalid, array->Validate());
 
-  // Null buffer absent but null_count > 0
+  // Null buffer absent but null_count > 0.
   data = ArrayData::Make(int64(), 2, {nullptr, data_buffer}, 1);
   array = MakeArray(data);
   ASSERT_RAISES(Invalid, array->Validate());
@@ -409,6 +455,13 @@ TEST(TestNullBuilder, Basics) {
 
 // ----------------------------------------------------------------------
 // Primitive type tests
+
+TEST(TestPrimitiveArray, CtorNoValidityBitmap) {
+  // ARROW-8863
+  std::shared_ptr<Buffer> data = *AllocateBuffer(40);
+  Int32Array arr(10, data);
+  ASSERT_EQ(arr.data()->null_count, 0);
+}
 
 TEST_F(TestBuilder, TestReserve) {
   UInt8Builder builder(pool_);
@@ -642,6 +695,33 @@ void TestPrimitiveBuilder<PBoolean>::Check(const std::unique_ptr<BooleanBuilder>
   ASSERT_EQ(0, builder->length());
   ASSERT_EQ(0, builder->capacity());
   ASSERT_EQ(0, builder->null_count());
+}
+
+TEST(TestBooleanArray, TrueCountFalseCount) {
+  random::RandomArrayGenerator rng(/*seed=*/0);
+
+  const int64_t length = 10000;
+  auto arr = rng.Boolean(length, /*true_probability=*/0.5, /*null_probability=*/0.1);
+
+  auto CheckArray = [&](const BooleanArray& values) {
+    int64_t expected_false = 0;
+    int64_t expected_true = 0;
+    for (int64_t i = 0; i < values.length(); ++i) {
+      if (values.IsValid(i)) {
+        if (values.Value(i)) {
+          ++expected_true;
+        } else {
+          ++expected_false;
+        }
+      }
+    }
+    ASSERT_EQ(values.true_count(), expected_true);
+    ASSERT_EQ(values.false_count(), expected_false);
+  };
+
+  CheckArray(checked_cast<const BooleanArray&>(*arr));
+  CheckArray(checked_cast<const BooleanArray&>(*arr->Slice(5)));
+  CheckArray(checked_cast<const BooleanArray&>(*arr->Slice(0, 0)));
 }
 
 TEST(TestPrimitiveAdHoc, TestType) {

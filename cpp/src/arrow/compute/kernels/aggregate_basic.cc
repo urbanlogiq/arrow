@@ -20,6 +20,7 @@
 #include "arrow/compute/api_aggregate.h"
 #include "arrow/compute/kernels/aggregate_internal.h"
 #include "arrow/compute/kernels/common.h"
+#include "arrow/util/make_unique.h"
 
 namespace arrow {
 namespace compute {
@@ -48,8 +49,7 @@ void AggregateFinalize(KernelContext* ctx, Datum* out) {
 // Count implementation
 
 struct CountImpl : public ScalarAggregator {
-  explicit CountImpl(CountOptions options)
-      : options(std::move(options)), non_nulls(0), nulls(0) {}
+  explicit CountImpl(CountOptions options) : options(std::move(options)) {}
 
   void Consume(KernelContext*, const ExecBatch& batch) override {
     const ArrayData& input = *batch[0].array();
@@ -85,8 +85,8 @@ struct CountImpl : public ScalarAggregator {
 };
 
 std::unique_ptr<KernelState> CountInit(KernelContext*, const KernelInitArgs& args) {
-  return std::unique_ptr<KernelState>(
-      new CountImpl(static_cast<const CountOptions&>(*args.options)));
+  return ::arrow::internal::make_unique<CountImpl>(
+      static_cast<const CountOptions&>(*args.options));
 }
 
 // ----------------------------------------------------------------------
@@ -255,6 +255,28 @@ struct SumState {
   }
 };
 
+template <>
+struct SumState<BooleanType> {
+  using SumType = typename FindAccumulatorType<BooleanType>::Type;
+  using ThisType = SumState<BooleanType, SumType>;
+
+  ThisType& operator+=(const ThisType& rhs) {
+    this->count += rhs.count;
+    this->sum += rhs.sum;
+    return *this;
+  }
+
+ public:
+  void Consume(const Array& input) {
+    const BooleanArray& array = static_cast<const BooleanArray&>(input);
+    count += array.length() - array.null_count();
+    sum += array.true_count();
+  }
+
+  size_t count = 0;
+  typename SumType::c_type sum = 0;
+};
+
 template <typename ArrowType>
 struct SumImpl : public ScalarAggregator {
   using ArrayType = typename TypeTraits<ArrowType>::ArrayType;
@@ -311,6 +333,11 @@ struct SumLikeInit {
     return Status::NotImplemented("No sum implemented");
   }
 
+  Status Visit(const BooleanType&) {
+    state.reset(new KernelClass<BooleanType>());
+    return Status::OK();
+  }
+
   template <typename Type>
   enable_if_number<Type, Status> Visit(const Type&) {
     state.reset(new KernelClass<Type>());
@@ -340,12 +367,37 @@ template <typename ArrowType, typename Enable = void>
 struct MinMaxState {};
 
 template <typename ArrowType>
+struct MinMaxState<ArrowType, enable_if_boolean<ArrowType>> {
+  using ThisType = MinMaxState<ArrowType>;
+  using T = typename ArrowType::c_type;
+
+  ThisType& operator+=(const ThisType& rhs) {
+    this->has_nulls |= rhs.has_nulls;
+    this->has_values |= rhs.has_values;
+    this->min = this->min && rhs.min;
+    this->max = this->max || rhs.max;
+    return *this;
+  }
+
+  void MergeOne(T value) {
+    this->min = this->min && value;
+    this->max = this->max || value;
+  }
+
+  T min = true;
+  T max = false;
+  bool has_nulls = false;
+  bool has_values = false;
+};
+
+template <typename ArrowType>
 struct MinMaxState<ArrowType, enable_if_integer<ArrowType>> {
   using ThisType = MinMaxState<ArrowType>;
   using T = typename ArrowType::c_type;
 
   ThisType& operator+=(const ThisType& rhs) {
     this->has_nulls |= rhs.has_nulls;
+    this->has_values |= rhs.has_values;
     this->min = std::min(this->min, rhs.min);
     this->max = std::max(this->max, rhs.max);
     return *this;
@@ -359,6 +411,7 @@ struct MinMaxState<ArrowType, enable_if_integer<ArrowType>> {
   T min = std::numeric_limits<T>::max();
   T max = std::numeric_limits<T>::min();
   bool has_nulls = false;
+  bool has_values = false;
 };
 
 template <typename ArrowType>
@@ -368,6 +421,7 @@ struct MinMaxState<ArrowType, enable_if_floating_point<ArrowType>> {
 
   ThisType& operator+=(const ThisType& rhs) {
     this->has_nulls |= rhs.has_nulls;
+    this->has_values |= rhs.has_values;
     this->min = std::fmin(this->min, rhs.min);
     this->max = std::fmax(this->max, rhs.max);
     return *this;
@@ -381,6 +435,7 @@ struct MinMaxState<ArrowType, enable_if_floating_point<ArrowType>> {
   T min = std::numeric_limits<T>::infinity();
   T max = -std::numeric_limits<T>::infinity();
   bool has_nulls = false;
+  bool has_values = false;
 };
 
 template <typename ArrowType>
@@ -397,24 +452,26 @@ struct MinMaxImpl : public ScalarAggregator {
 
     ArrayType arr(batch[0].array());
 
-    local.has_nulls = arr.null_count() > 0;
+    const auto null_count = arr.null_count();
+    local.has_nulls = null_count > 0;
+    local.has_values = (arr.length() - null_count) > 0;
+
     if (local.has_nulls && options.null_handling == MinMaxOptions::OUTPUT_NULL) {
       this->state = local;
       return;
     }
 
-    const auto values = arr.raw_values();
-    if (arr.null_count() > 0) {
+    if (local.has_nulls) {
       BitmapReader reader(arr.null_bitmap_data(), arr.offset(), arr.length());
       for (int64_t i = 0; i < arr.length(); i++) {
         if (reader.IsSet()) {
-          local.MergeOne(values[i]);
+          local.MergeOne(arr.Value(i));
         }
         reader.Next();
       }
     } else {
       for (int64_t i = 0; i < arr.length(); i++) {
-        local.MergeOne(values[i]);
+        local.MergeOne(arr.Value(i));
       }
     }
     this->state = local;
@@ -429,7 +486,8 @@ struct MinMaxImpl : public ScalarAggregator {
     using ScalarType = typename TypeTraits<ArrowType>::ScalarType;
 
     std::vector<std::shared_ptr<Scalar>> values;
-    if (state.has_nulls && options.null_handling == MinMaxOptions::OUTPUT_NULL) {
+    if (!state.has_values ||
+        (state.has_nulls && options.null_handling == MinMaxOptions::OUTPUT_NULL)) {
       // (null, null)
       values = {std::make_shared<ScalarType>(), std::make_shared<ScalarType>()};
     } else {
@@ -442,6 +500,33 @@ struct MinMaxImpl : public ScalarAggregator {
   std::shared_ptr<DataType> out_type;
   MinMaxOptions options;
   MinMaxState<ArrowType> state;
+};
+
+struct BooleanMinMaxImpl : public MinMaxImpl<BooleanType> {
+  using MinMaxImpl::MinMaxImpl;
+
+  void Consume(KernelContext*, const ExecBatch& batch) override {
+    StateType local;
+    ArrayType arr(batch[0].array());
+
+    const auto arr_length = arr.length();
+    const auto null_count = arr.null_count();
+    const auto valid_count = arr_length - null_count;
+
+    local.has_nulls = null_count > 0;
+    local.has_values = valid_count > 0;
+    if (local.has_nulls && options.null_handling == MinMaxOptions::OUTPUT_NULL) {
+      this->state = local;
+      return;
+    }
+
+    const auto true_count = arr.true_count();
+    const auto false_count = valid_count - true_count;
+    local.max = true_count > 0;
+    local.min = false_count == 0;
+
+    this->state = local;
+  }
 };
 
 struct MinMaxInitState {
@@ -461,6 +546,11 @@ struct MinMaxInitState {
 
   Status Visit(const HalfFloatType&) {
     return Status::NotImplemented("No sum implemented");
+  }
+
+  Status Visit(const BooleanType&) {
+    state.reset(new BooleanMinMaxImpl(out_type, options));
+    return Status::OK();
   }
 
   template <typename Type>
@@ -514,7 +604,9 @@ void AddMinMaxKernels(KernelInit init,
 }
 
 void RegisterScalarAggregateBasic(FunctionRegistry* registry) {
-  auto func = std::make_shared<ScalarAggregateFunction>("count", Arity::Unary());
+  static auto default_count_options = CountOptions::Defaults();
+  auto func = std::make_shared<ScalarAggregateFunction>("count", Arity::Unary(),
+                                                        &default_count_options);
 
   /// Takes any array input, outputs int64 scalar
   InputType any_array(ValueDescr::ARRAY);
@@ -523,16 +615,21 @@ void RegisterScalarAggregateBasic(FunctionRegistry* registry) {
   DCHECK_OK(registry->AddFunction(std::move(func)));
 
   func = std::make_shared<ScalarAggregateFunction>("sum", Arity::Unary());
+  AddBasicAggKernels(SumInit, {boolean()}, int64(), func.get());
   AddBasicAggKernels(SumInit, SignedIntTypes(), int64(), func.get());
   AddBasicAggKernels(SumInit, UnsignedIntTypes(), uint64(), func.get());
   AddBasicAggKernels(SumInit, FloatingPointTypes(), float64(), func.get());
   DCHECK_OK(registry->AddFunction(std::move(func)));
 
   func = std::make_shared<ScalarAggregateFunction>("mean", Arity::Unary());
+  AddBasicAggKernels(MeanInit, {boolean()}, float64(), func.get());
   AddBasicAggKernels(MeanInit, NumericTypes(), float64(), func.get());
   DCHECK_OK(registry->AddFunction(std::move(func)));
 
-  func = std::make_shared<ScalarAggregateFunction>("minmax", Arity::Unary());
+  static auto default_minmax_options = MinMaxOptions::Defaults();
+  func = std::make_shared<ScalarAggregateFunction>("minmax", Arity::Unary(),
+                                                   &default_minmax_options);
+  AddMinMaxKernels(MinMaxInit, {boolean()}, func.get());
   AddMinMaxKernels(MinMaxInit, NumericTypes(), func.get());
   DCHECK_OK(registry->AddFunction(std::move(func)));
 }

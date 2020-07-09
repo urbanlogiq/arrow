@@ -95,30 +95,22 @@ class ARROW_DS_EXPORT ParquetFileFormat : public FileFormat {
   Result<std::shared_ptr<Schema>> Inspect(const FileSource& source) const override;
 
   /// \brief Open a file for scanning
-  Result<ScanTaskIterator> ScanFile(const FileSource& source,
-                                    std::shared_ptr<ScanOptions> options,
-                                    std::shared_ptr<ScanContext> context) const override;
-
-  /// \brief Open a file for scanning, restricted to the specified row groups.
-  Result<ScanTaskIterator> ScanFile(const FileSource& source,
-                                    std::shared_ptr<ScanOptions> options,
+  Result<ScanTaskIterator> ScanFile(std::shared_ptr<ScanOptions> options,
                                     std::shared_ptr<ScanContext> context,
-                                    std::vector<RowGroupInfo> row_groups) const;
+                                    FileFragment* file) const override;
 
   using FileFormat::MakeFragment;
 
   /// \brief Create a Fragment, restricted to the specified row groups.
   Result<std::shared_ptr<FileFragment>> MakeFragment(
       FileSource source, std::shared_ptr<Expression> partition_expression,
-      std::vector<RowGroupInfo> row_groups);
-
-  Result<std::shared_ptr<FileFragment>> MakeFragment(
-      FileSource source, std::shared_ptr<Expression> partition_expression,
-      std::vector<int> row_groups);
+      std::vector<RowGroupInfo> row_groups,
+      std::shared_ptr<Schema> physical_schema = NULLPTR);
 
   /// \brief Create a Fragment targeting all RowGroups.
   Result<std::shared_ptr<FileFragment>> MakeFragment(
-      FileSource source, std::shared_ptr<Expression> partition_expression) override;
+      FileSource source, std::shared_ptr<Expression> partition_expression,
+      std::shared_ptr<Schema> physical_schema) override;
 
   /// \brief Return a FileReader on the given source.
   Result<std::unique_ptr<parquet::arrow::FileReader>> GetReader(
@@ -134,8 +126,10 @@ class ARROW_DS_EXPORT RowGroupInfo : public util::EqualityComparable<RowGroupInf
   explicit RowGroupInfo(int id) : RowGroupInfo(id, -1, NULLPTR) {}
 
   /// \brief Construct a RowGroup from an identifier with statistics.
-  RowGroupInfo(int id, int64_t num_rows, std::shared_ptr<Expression> statistics)
-      : id_(id), num_rows_(num_rows), statistics_(std::move(statistics)) {}
+  RowGroupInfo(int id, int64_t num_rows, std::shared_ptr<StructScalar> statistics)
+      : id_(id), num_rows_(num_rows), statistics_(std::move(statistics)) {
+    SetStatisticsExpression();
+  }
 
   /// \brief Transform a vector of identifiers into a vector of RowGroupInfos
   static std::vector<RowGroupInfo> FromIdentifiers(const std::vector<int> ids);
@@ -150,10 +144,13 @@ class ARROW_DS_EXPORT RowGroupInfo : public util::EqualityComparable<RowGroupInf
   int64_t num_rows() const { return num_rows_; }
   void set_num_rows(int64_t num_rows) { num_rows_ = num_rows; }
 
-  /// \brief Return the RowGroup's statistics
-  const std::shared_ptr<Expression>& statistics() const { return statistics_; }
-  void set_statistics(std::shared_ptr<Expression> statistics) {
+  /// \brief Return the RowGroup's statistics as a StructScalar with a field for
+  /// each column with statistics.
+  /// Each field will also be a StructScalar with "min" and "max" fields.
+  const std::shared_ptr<StructScalar>& statistics() const { return statistics_; }
+  void set_statistics(std::shared_ptr<StructScalar> statistics) {
     statistics_ = std::move(statistics);
+    SetStatisticsExpression();
   }
 
   /// \brief Indicate if statistics are set.
@@ -169,9 +166,12 @@ class ARROW_DS_EXPORT RowGroupInfo : public util::EqualityComparable<RowGroupInf
   bool Equals(const RowGroupInfo& other) const { return id() == other.id(); }
 
  private:
+  void SetStatisticsExpression();
+
   int id_;
   int64_t num_rows_;
-  std::shared_ptr<Expression> statistics_;
+  std::shared_ptr<Expression> statistics_expression_;
+  std::shared_ptr<StructScalar> statistics_;
 };
 
 /// \brief A FileFragment with parquet logic.
@@ -188,9 +188,6 @@ class ARROW_DS_EXPORT RowGroupInfo : public util::EqualityComparable<RowGroupInf
 /// significant performance boost when scanning high latency file systems.
 class ARROW_DS_EXPORT ParquetFileFragment : public FileFragment {
  public:
-  Result<ScanTaskIterator> Scan(std::shared_ptr<ScanOptions> options,
-                                std::shared_ptr<ScanContext> context) override;
-
   Result<FragmentVector> SplitByRowGroup(const std::shared_ptr<Expression>& predicate);
 
   /// \brief Return the RowGroups selected by this fragment. An empty list
@@ -206,13 +203,45 @@ class ARROW_DS_EXPORT ParquetFileFragment : public FileFragment {
  private:
   ParquetFileFragment(FileSource source, std::shared_ptr<FileFormat> format,
                       std::shared_ptr<Expression> partition_expression,
+                      std::shared_ptr<Schema> physical_schema,
                       std::vector<RowGroupInfo> row_groups);
+
+  // TODO(bkietz) override ReadPhysicalSchemaImpl to augment row_groups_
+  // while a reader is opened anyway
 
   std::vector<RowGroupInfo> row_groups_;
   ParquetFileFormat& parquet_format_;
   bool has_complete_metadata_;
 
   friend class ParquetFileFormat;
+};
+
+struct ParquetFactoryOptions {
+  // Either an explicit Partitioning or a PartitioningFactory to discover one.
+  //
+  // If a factory is provided, it will be used to infer a schema for partition fields
+  // based on file and directory paths then construct a Partitioning. The default
+  // is a Partitioning which will yield no partition information.
+  //
+  // The (explicit or discovered) partitioning will be applied to discovered files
+  // and the resulting partition information embedded in the Dataset.
+  PartitioningOrFactory partitioning{Partitioning::Default()};
+
+  // For the purposes of applying the partitioning, paths will be stripped
+  // of the partition_base_dir. Files not matching the partition_base_dir
+  // prefix will be skipped for partition discovery. The ignored files will still
+  // be part of the Dataset, but will not have partition information.
+  //
+  // Example:
+  // partition_base_dir = "/dataset";
+  //
+  // - "/dataset/US/sales.csv" -> "US/sales.csv" will be given to the partitioning
+  //
+  // - "/home/john/late_sales.csv" -> Will be ignored for partition discovery.
+  //
+  // This is useful for partitioning which parses directory when ordering
+  // is important, e.g. DirectoryPartitioning.
+  std::string partition_base_dir;
 };
 
 /// \brief Create FileSystemDataset from custom `_metadata` cache file.
@@ -234,9 +263,10 @@ class ARROW_DS_EXPORT ParquetDatasetFactory : public DatasetFactory {
   /// \param[in] metadata_path path of the metadata parquet file
   /// \param[in] filesystem from which to open/read the path
   /// \param[in] format to read the file with.
+  /// \param[in] options see ParquetFactoryOptions
   static Result<std::shared_ptr<DatasetFactory>> Make(
       const std::string& metadata_path, std::shared_ptr<fs::FileSystem> filesystem,
-      std::shared_ptr<ParquetFileFormat> format);
+      std::shared_ptr<ParquetFileFormat> format, ParquetFactoryOptions options);
 
   /// \brief Create a ParquetDatasetFactory from a metadata source.
   ///
@@ -248,10 +278,11 @@ class ARROW_DS_EXPORT ParquetDatasetFactory : public DatasetFactory {
   /// \param[in] base_path used as the prefix of every parquet files referenced
   /// \param[in] filesystem from which to read the files referenced.
   /// \param[in] format to read the file with.
+  /// \param[in] options see ParquetFactoryOptions
   static Result<std::shared_ptr<DatasetFactory>> Make(
       const FileSource& metadata, const std::string& base_path,
       std::shared_ptr<fs::FileSystem> filesystem,
-      std::shared_ptr<ParquetFileFormat> format);
+      std::shared_ptr<ParquetFileFormat> format, ParquetFactoryOptions options);
 
   Result<std::vector<std::shared_ptr<Schema>>> InspectSchemas(
       InspectOptions options) override;
@@ -262,17 +293,25 @@ class ARROW_DS_EXPORT ParquetDatasetFactory : public DatasetFactory {
   ParquetDatasetFactory(std::shared_ptr<fs::FileSystem> fs,
                         std::shared_ptr<ParquetFileFormat> format,
                         std::shared_ptr<parquet::FileMetaData> metadata,
-                        std::string base_path);
+                        std::string base_path, ParquetFactoryOptions options);
 
   std::shared_ptr<fs::FileSystem> filesystem_;
   std::shared_ptr<ParquetFileFormat> format_;
   std::shared_ptr<parquet::FileMetaData> metadata_;
   std::string base_path_;
+  ParquetFactoryOptions options_;
+  FragmentVector fragments_;
 
  private:
-  Result<std::vector<std::shared_ptr<FileFragment>>> CollectParquetFragments(
+  Result<std::vector<std::string>> CollectPaths(
       const parquet::FileMetaData& metadata,
       const parquet::ArrowReaderProperties& properties);
+
+  Result<std::vector<std::shared_ptr<FileFragment>>> CollectParquetFragments(
+      const parquet::FileMetaData& metadata,
+      const parquet::ArrowReaderProperties& properties, const Partitioning& partitioning);
+
+  Result<std::shared_ptr<Schema>> PartitionSchema();
 };
 
 }  // namespace dataset

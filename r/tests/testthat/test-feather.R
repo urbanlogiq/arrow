@@ -177,6 +177,7 @@ test_that("read_feather requires RandomAccessFile and errors nicely otherwise (A
 
 test_that("read_feather closes connection to file", {
   tf <- tempfile()
+  on.exit(unlink(tf))
   write_feather(tib, sink = tf)
   expect_true(file.exists(tf))
   read_feather(tf)

@@ -58,6 +58,7 @@ set(ARROW_THIRDPARTY_DEPENDENCIES
     RapidJSON
     Snappy
     Thrift
+    utf8proc
     ZLIB
     ZSTD)
 
@@ -135,6 +136,8 @@ macro(build_dependency DEPENDENCY_NAME)
     build_re2()
   elseif("${DEPENDENCY_NAME}" STREQUAL "Thrift")
     build_thrift()
+  elseif("${DEPENDENCY_NAME}" STREQUAL "utf8proc")
+    build_utf8proc()
   elseif("${DEPENDENCY_NAME}" STREQUAL "ZLIB")
     build_zlib()
   elseif("${DEPENDENCY_NAME}" STREQUAL "ZSTD")
@@ -208,6 +211,11 @@ endif()
 
 if(ARROW_ORC OR ARROW_FLIGHT OR ARROW_GANDIVA)
   set(ARROW_WITH_PROTOBUF ON)
+endif()
+
+if(NOT ARROW_COMPUTE)
+  # utf8proc is only potentially used in kernels for now
+  set(ARROW_WITH_UTF8PROC OFF)
 endif()
 
 # ----------------------------------------------------------------------
@@ -483,13 +491,22 @@ else()
     )
 endif()
 
-if(DEFINED ENV{BZIP2_SOURCE_URL})
-  set(BZIP2_SOURCE_URL "$ENV{BZIP2_SOURCE_URL}")
+if(DEFINED ENV{ARROW_BZIP2_SOURCE_URL})
+  set(ARROW_BZIP2_SOURCE_URL "$ENV{ARROW_BZIP2_SOURCE_URL}")
 else()
   set_urls(
-    BZIP2_SOURCE_URL
+    ARROW_BZIP2_SOURCE_URL
     "https://sourceware.org/pub/bzip2/bzip2-${ARROW_BZIP2_BUILD_VERSION}.tar.gz"
     "https://github.com/ursa-labs/thirdparty/releases/download/latest/bzip2-${ARROW_BZIP2_BUILD_VERSION}.tar.gz"
+    )
+endif()
+
+if(DEFINED ENV{ARROW_UTF8PROC_SOURCE_URL})
+  set(ARROW_UTF8PROC_SOURCE_URL "$ENV{ARROW_UTF8PROC_SOURCE_URL}")
+else()
+  set_urls(
+    ARROW_UTF8PROC_SOURCE_URL
+    "https://github.com/JuliaStrings/utf8proc/archive/${ARROW_UTF8PROC_BUILD_VERSION}.tar.gz"
     )
 endif()
 
@@ -597,14 +614,22 @@ macro(build_boost)
   else()
     set(BOOST_CONFIGURE_COMMAND "./bootstrap.sh")
   endif()
+
+  set(BOOST_BUILD_WITH_LIBRARIES "filesystem" "regex" "system")
+  string(REPLACE ";" "," BOOST_CONFIGURE_LIBRARIES "${BOOST_BUILD_WITH_LIBRARIES}")
   list(APPEND BOOST_CONFIGURE_COMMAND "--prefix=${BOOST_PREFIX}"
-              "--with-libraries=filesystem,regex,system")
+              "--with-libraries=${BOOST_CONFIGURE_LIBRARIES}")
   set(BOOST_BUILD_COMMAND "./b2" "-j${NPROC}" "link=${BOOST_BUILD_LINK}"
                           "variant=${BOOST_BUILD_VARIANT}")
   if(MSVC)
     string(REGEX
            REPLACE "([0-9])$" ".\\1" BOOST_TOOLSET_MSVC_VERSION ${MSVC_TOOLSET_VERSION})
     list(APPEND BOOST_BUILD_COMMAND "toolset=msvc-${BOOST_TOOLSET_MSVC_VERSION}")
+    set(BOOST_BUILD_WITH_LIBRARIES_MSVC)
+    foreach(_BOOST_LIB ${BOOST_BUILD_WITH_LIBRARIES})
+      list(APPEND BOOST_BUILD_WITH_LIBRARIES_MSVC "--with-${_BOOST_LIB}")
+    endforeach()
+    list(APPEND BOOST_BUILD_COMMAND ${BOOST_BUILD_WITH_LIBRARIES_MSVC})
   else()
     list(APPEND BOOST_BUILD_COMMAND "cxxflags=-fPIC")
   endif()
@@ -862,7 +887,7 @@ macro(build_brotli)
     "${BROTLI_PREFIX}/${BROTLI_LIB_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}brotlicommon-static${CMAKE_STATIC_LIBRARY_SUFFIX}"
     )
   set(BROTLI_CMAKE_ARGS ${EP_COMMON_CMAKE_ARGS} "-DCMAKE_INSTALL_PREFIX=${BROTLI_PREFIX}"
-                        -DCMAKE_INSTALL_LIBDIR=${BROTLI_LIB_DIR} -DBUILD_SHARED_LIBS=OFF)
+                        -DCMAKE_INSTALL_LIBDIR=${BROTLI_LIB_DIR})
 
   externalproject_add(brotli_ep
                       URL ${BROTLI_SOURCE_URL}
@@ -1215,29 +1240,51 @@ macro(build_protobuf)
     PROTOC_STATIC_LIB
     "${PROTOBUF_PREFIX}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}protoc${CMAKE_STATIC_LIBRARY_SUFFIX}"
     )
+  set(Protobuf_PROTOC_LIBRARY "${PROTOC_STATIC_LIB}")
   set(PROTOBUF_COMPILER "${PROTOBUF_PREFIX}/bin/protoc")
-  set(PROTOBUF_CONFIGURE_ARGS
-      "AR=${CMAKE_AR}"
-      "RANLIB=${CMAKE_RANLIB}"
-      "CC=${CMAKE_C_COMPILER}"
-      "CXX=${CMAKE_CXX_COMPILER}"
-      "--disable-shared"
-      "--prefix=${PROTOBUF_PREFIX}"
-      "CFLAGS=${EP_C_FLAGS}"
-      "CXXFLAGS=${EP_CXX_FLAGS}")
-  set(PROTOBUF_BUILD_COMMAND ${MAKE} ${MAKE_BUILD_ARGS})
-  if(CMAKE_OSX_SYSROOT)
-    list(APPEND PROTOBUF_CONFIGURE_ARGS "SDKROOT=${CMAKE_OSX_SYSROOT}")
-    list(APPEND PROTOBUF_BUILD_COMMAND "SDKROOT=${CMAKE_OSX_SYSROOT}")
+
+  if(CMAKE_VERSION VERSION_LESS 3.7)
+    set(PROTOBUF_CONFIGURE_ARGS
+        "AR=${CMAKE_AR}"
+        "RANLIB=${CMAKE_RANLIB}"
+        "CC=${CMAKE_C_COMPILER}"
+        "CXX=${CMAKE_CXX_COMPILER}"
+        "--disable-shared"
+        "--prefix=${PROTOBUF_PREFIX}"
+        "CFLAGS=${EP_C_FLAGS}"
+        "CXXFLAGS=${EP_CXX_FLAGS}")
+    set(PROTOBUF_BUILD_COMMAND ${MAKE} ${MAKE_BUILD_ARGS})
+    if(CMAKE_OSX_SYSROOT)
+      list(APPEND PROTOBUF_CONFIGURE_ARGS "SDKROOT=${CMAKE_OSX_SYSROOT}")
+      list(APPEND PROTOBUF_BUILD_COMMAND "SDKROOT=${CMAKE_OSX_SYSROOT}")
+    endif()
+    set(PROTOBUF_EXTERNAL_PROJECT_ADD_ARGS
+        CONFIGURE_COMMAND
+        "./configure"
+        ${PROTOBUF_CONFIGURE_ARGS}
+        BUILD_COMMAND
+        ${PROTOBUF_BUILD_COMMAND})
+  else()
+    set(PROTOBUF_CMAKE_ARGS
+        ${EP_COMMON_CMAKE_ARGS}
+        -DBUILD_SHARED_LIBS=OFF
+        -DCMAKE_INSTALL_LIBDIR=lib
+        "-DCMAKE_INSTALL_PREFIX=${PROTOBUF_PREFIX}"
+        -Dprotobuf_BUILD_TESTS=OFF
+        -Dprotobuf_DEBUG_POSTFIX=)
+    if(ZLIB_ROOT)
+      list(APPEND PROTOBUF_CMAKE_ARGS "-DZLIB_ROOT=${ZLIB_ROOT}")
+    endif()
+    set(PROTOBUF_EXTERNAL_PROJECT_ADD_ARGS CMAKE_ARGS ${PROTOBUF_CMAKE_ARGS} SOURCE_SUBDIR
+                                           "cmake")
   endif()
 
   externalproject_add(protobuf_ep
-                      CONFIGURE_COMMAND "./configure" ${PROTOBUF_CONFIGURE_ARGS}
-                      BUILD_COMMAND ${PROTOBUF_BUILD_COMMAND}
-                      BUILD_IN_SOURCE 1
-                      URL ${PROTOBUF_SOURCE_URL}
+                      ${PROTOBUF_EXTERNAL_PROJECT_ADD_ARGS}
                       BUILD_BYPRODUCTS "${PROTOBUF_STATIC_LIB}" "${PROTOBUF_COMPILER}"
-                                       ${EP_LOG_OPTIONS})
+                                       ${EP_LOG_OPTIONS}
+                      BUILD_IN_SOURCE 1
+                      URL ${PROTOBUF_SOURCE_URL})
 
   file(MAKE_DIRECTORY "${PROTOBUF_INCLUDE_DIR}")
 
@@ -1978,7 +2025,7 @@ macro(build_bzip2)
                       INSTALL_COMMAND ${MAKE} install PREFIX=${BZIP2_PREFIX}
                                       ${BZIP2_EXTRA_ARGS}
                       INSTALL_DIR ${BZIP2_PREFIX}
-                      URL ${BZIP2_SOURCE_URL}
+                      URL ${ARROW_BZIP2_SOURCE_URL}
                       BUILD_BYPRODUCTS "${BZIP2_STATIC_LIB}")
 
   file(MAKE_DIRECTORY "${BZIP2_PREFIX}/include")
@@ -2003,6 +2050,66 @@ if(ARROW_WITH_BZ2)
                                      INTERFACE_INCLUDE_DIRECTORIES "${BZIP2_INCLUDE_DIR}")
   endif()
   include_directories(SYSTEM "${BZIP2_INCLUDE_DIR}")
+endif()
+
+macro(build_utf8proc)
+  message(STATUS "Building utf8proc from source")
+  set(UTF8PROC_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/utf8proc_ep-install")
+  if(MSVC)
+    set(UTF8PROC_STATIC_LIB "${UTF8PROC_PREFIX}/lib/utf8proc_static.lib")
+  else()
+    set(
+      UTF8PROC_STATIC_LIB
+      "${UTF8PROC_PREFIX}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}utf8proc${CMAKE_STATIC_LIBRARY_SUFFIX}"
+      )
+  endif()
+
+  set(UTF8PROC_CMAKE_ARGS
+      ${EP_COMMON_TOOLCHAIN}
+      "-DCMAKE_INSTALL_PREFIX=${UTF8PROC_PREFIX}"
+      -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+      -DCMAKE_INSTALL_LIBDIR=lib
+      -DBUILD_SHARED_LIBS=OFF)
+
+  externalproject_add(utf8proc_ep
+                      ${EP_LOG_OPTIONS}
+                      CMAKE_ARGS ${UTF8PROC_CMAKE_ARGS}
+                      INSTALL_DIR ${UTF8PROC_PREFIX}
+                      URL ${ARROW_UTF8PROC_SOURCE_URL}
+                      BUILD_BYPRODUCTS "${UTF8PROC_STATIC_LIB}")
+
+  file(MAKE_DIRECTORY "${UTF8PROC_PREFIX}/include")
+  add_library(utf8proc::utf8proc STATIC IMPORTED)
+  set_target_properties(utf8proc::utf8proc
+                        PROPERTIES IMPORTED_LOCATION
+                                   "${UTF8PROC_STATIC_LIB}"
+                                   INTERFACE_COMPILER_DEFINITIONS
+                                   "UTF8PROC_STATIC"
+                                   INTERFACE_INCLUDE_DIRECTORIES
+                                   "${UTF8PROC_PREFIX}/include")
+
+  add_dependencies(toolchain utf8proc_ep)
+  add_dependencies(utf8proc::utf8proc utf8proc_ep)
+endmacro()
+
+if(ARROW_WITH_UTF8PROC)
+  resolve_dependency(utf8proc)
+
+  add_definitions(-DARROW_WITH_UTF8PROC)
+
+  # TODO: Don't use global definitions but rather
+  # target_compile_definitions or target_link_libraries
+  get_target_property(UTF8PROC_COMPILER_DEFINITIONS utf8proc::utf8proc
+                      INTERFACE_COMPILER_DEFINITIONS)
+  if(UTF8PROC_COMPILER_DEFINITIONS)
+    add_definitions(-D${UTF8PROC_COMPILER_DEFINITIONS})
+  endif()
+
+  # TODO: Don't use global includes but rather
+  # target_include_directories or target_link_libraries
+  get_target_property(UTF8PROC_INCLUDE_DIR utf8proc::utf8proc
+                      INTERFACE_INCLUDE_DIRECTORIES)
+  include_directories(SYSTEM ${UTF8PROC_INCLUDE_DIR})
 endif()
 
 macro(build_cares)

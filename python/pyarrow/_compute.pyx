@@ -24,6 +24,7 @@ import pyarrow.lib as lib
 
 import numpy as np
 
+
 cdef wrap_scalar_function(const shared_ptr[CFunction]& sp_func):
     cdef ScalarFunction func = ScalarFunction.__new__(ScalarFunction)
     func.init(sp_func)
@@ -176,6 +177,7 @@ num_kernels: {}
     def call(self, args, FunctionOptions options=None):
         cdef:
             const CFunctionOptions* c_options = NULL
+            CExecContext* c_exec_ctx = NULL
             vector[CDatum] c_args
             CDatum result
 
@@ -185,7 +187,9 @@ num_kernels: {}
             c_options = options.get_options()
 
         with nogil:
-            result = GetResultValue(self.base_func.Execute(c_args, c_options))
+            result = GetResultValue(self.base_func.Execute(c_args,
+                                                           c_options,
+                                                           c_exec_ctx))
 
         return wrap_datum(result)
 
@@ -249,8 +253,8 @@ cdef _pack_compute_args(object values, vector[CDatum]* out):
             out.push_back(CDatum((<Array> val).sp_array))
         elif isinstance(val, ChunkedArray):
             out.push_back(CDatum((<ChunkedArray> val).sp_chunked_array))
-        elif isinstance(val, ScalarValue):
-            out.push_back(CDatum((<ScalarValue> val).sp_scalar))
+        elif isinstance(val, Scalar):
+            out.push_back(CDatum((<Scalar> val).unwrap()))
         elif isinstance(val, RecordBatch):
             out.push_back(CDatum((<RecordBatch> val).sp_batch))
         elif isinstance(val, Table):
@@ -393,6 +397,18 @@ cdef class CastOptions(FunctionOptions):
     @allow_invalid_utf8.setter
     def allow_invalid_utf8(self, bint flag):
         self.options.allow_invalid_utf8 = flag
+
+
+cdef class BinaryContainsExactOptions(FunctionOptions):
+    cdef:
+        unique_ptr[CBinaryContainsExactOptions] binary_contains_exact_options
+
+    def __init__(self, pattern):
+        self.binary_contains_exact_options.reset(
+            new CBinaryContainsExactOptions(tobytes(pattern)))
+
+    cdef const CFunctionOptions* get_options(self) except NULL:
+        return self.binary_contains_exact_options.get()
 
 
 cdef class FilterOptions(FunctionOptions):

@@ -19,15 +19,15 @@ package org.apache.arrow.memory;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
-
-import io.netty.buffer.PooledByteBufAllocatorL;
 
 public class TestArrowBuf {
 
@@ -38,7 +38,7 @@ public class TestArrowBuf {
   public static void beforeClass() {
     allocator = new RootAllocator(MAX_ALLOCATION);
   }
-  
+
   /** Ensure the allocator is closed. */
   @AfterClass
   public static void afterClass() {
@@ -126,40 +126,24 @@ public class TestArrowBuf {
     }
   }
 
+  /** ARROW-9221: guard against big-endian byte buffers. */
   @Test
-  public void testEmptyArrowBuf() {
-    ArrowBuf buf = new ArrowBuf(ReferenceManager.NO_OP, null,
-        1024, new PooledByteBufAllocatorL().empty.memoryAddress());
-
-    buf.getReferenceManager().retain();
-    buf.getReferenceManager().retain(8);
-    assertEquals(1024, buf.capacity());
-    assertEquals(1, buf.getReferenceManager().getRefCount());
-    assertEquals(0, buf.getActualMemoryConsumed());
-
-    for (int i = 0; i < 10; i++) {
-      buf.setByte(i, i);
+  public void testSetBytesBigEndian() {
+    final byte[] expected = new byte[64];
+    for (int i = 0; i < expected.length; i++) {
+      expected[i] = (byte) i;
     }
-    assertEquals(0, buf.getActualMemoryConsumed());
-    assertEquals(0, buf.getReferenceManager().getSize());
-    assertEquals(0, buf.getReferenceManager().getAccountedSize());
-    assertEquals(false, buf.getReferenceManager().release());
-    assertEquals(false, buf.getReferenceManager().release(2));
-    assertEquals(0, buf.getReferenceManager().getAllocator().getLimit());
-    assertEquals(buf, buf.getReferenceManager().transferOwnership(buf, allocator).getTransferredBuffer());
-    assertEquals(0, buf.readerIndex());
-    assertEquals(0, buf.writerIndex());
-    assertEquals(1, buf.refCnt());
-
-    ArrowBuf derive = buf.getReferenceManager().deriveBuffer(buf, 0, 100);
-    assertEquals(derive, buf);
-    assertEquals(1, buf.refCnt());
-    assertEquals(1, derive.refCnt());
-
-    buf.close();
-
-    ArrowBuf buf2 = ArrowBuf.empty(10);
-    assertEquals(10, buf2.capacity());
+    // Only this code path is susceptible: others use unsafe or byte-by-byte copies, while this override copies longs.
+    final ByteBuffer data = ByteBuffer.wrap(expected).asReadOnlyBuffer();
+    assertFalse(data.hasArray());
+    assertFalse(data.isDirect());
+    assertEquals(ByteOrder.BIG_ENDIAN, data.order());
+    try (ArrowBuf buf = allocator.buffer(expected.length)) {
+      buf.setBytes(0, data);
+      byte[] actual = new byte[expected.length];
+      buf.getBytes(0, actual);
+      assertArrayEquals(expected, actual);
+    }
   }
 
 }

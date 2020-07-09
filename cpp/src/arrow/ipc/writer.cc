@@ -59,6 +59,7 @@ namespace arrow {
 using internal::checked_cast;
 using internal::checked_pointer_cast;
 using internal::CopyBitmap;
+using internal::GetByteWidth;
 
 namespace ipc {
 
@@ -137,8 +138,8 @@ class RecordBatchSerializer {
     // push back all common elements
     field_nodes_.push_back({arr.length(), arr.null_count(), 0});
 
-    // Null type has no validity bitmap
-    if (arr.type_id() != Type::NA) {
+    // Null and union types have no validity bitmap
+    if (::arrow::internal::HasValidityBitmap(arr.type_id())) {
       if (arr.null_count() > 0) {
         std::shared_ptr<Buffer> bitmap;
         RETURN_NOT_OK(GetTruncatedBitmap(arr.offset(), arr.length(), arr.null_bitmap(),
@@ -155,7 +156,7 @@ class RecordBatchSerializer {
   // Override this for writing dictionary metadata
   virtual Status SerializeMetadata(int64_t num_rows) {
     return WriteRecordBatchMessage(num_rows, out_->body_length, custom_metadata_,
-                                   field_nodes_, buffer_meta_, &out_->metadata);
+                                   field_nodes_, buffer_meta_, options_, &out_->metadata);
   }
 
   void AppendCustomMetadata(const std::string& key, const std::string& value) {
@@ -185,10 +186,6 @@ class RecordBatchSerializer {
     std::unique_ptr<util::Codec> codec;
 
     RETURN_NOT_OK(internal::CheckCompressionSupported(options_.compression));
-
-    // TODO check allowed values for compression?
-    AppendCustomMetadata("ARROW:experimental_compression",
-                         util::Codec::GetCodecAsString(options_.compression));
 
     ARROW_ASSIGN_OR_RAISE(
         codec, util::Codec::Create(options_.compression, options_.compression_level));
@@ -310,8 +307,7 @@ class RecordBatchSerializer {
   Visit(const T& array) {
     std::shared_ptr<Buffer> data = array.values();
 
-    const auto& fw_type = checked_cast<const FixedWidthType&>(*array.type());
-    const int64_t type_width = fw_type.bit_width() / 8;
+    const int64_t type_width = GetByteWidth(*array.type());
     int64_t min_length = PaddedLength(array.length() * type_width);
 
     if (NeedTruncate(array.offset(), data.get(), min_length)) {
@@ -536,14 +532,15 @@ class RecordBatchSerializer {
 
 class DictionarySerializer : public RecordBatchSerializer {
  public:
-  DictionarySerializer(int64_t dictionary_id, int64_t buffer_start_offset,
+  DictionarySerializer(int64_t dictionary_id, bool is_delta, int64_t buffer_start_offset,
                        const IpcWriteOptions& options, IpcPayload* out)
       : RecordBatchSerializer(buffer_start_offset, options, out),
-        dictionary_id_(dictionary_id) {}
+        dictionary_id_(dictionary_id),
+        is_delta_(is_delta) {}
 
   Status SerializeMetadata(int64_t num_rows) override {
-    return WriteDictionaryMessage(dictionary_id_, num_rows, out_->body_length,
-                                  custom_metadata_, field_nodes_, buffer_meta_,
+    return WriteDictionaryMessage(dictionary_id_, is_delta_, num_rows, out_->body_length,
+                                  custom_metadata_, field_nodes_, buffer_meta_, options_,
                                   &out_->metadata);
   }
 
@@ -556,6 +553,7 @@ class DictionarySerializer : public RecordBatchSerializer {
 
  private:
   int64_t dictionary_id_;
+  bool is_delta_;
 };
 
 }  // namespace internal
@@ -604,9 +602,16 @@ Status GetSchemaPayload(const Schema& schema, const IpcWriteOptions& options,
 
 Status GetDictionaryPayload(int64_t id, const std::shared_ptr<Array>& dictionary,
                             const IpcWriteOptions& options, IpcPayload* out) {
+  return GetDictionaryPayload(id, false, dictionary, options, out);
+}
+
+Status GetDictionaryPayload(int64_t id, bool is_delta,
+                            const std::shared_ptr<Array>& dictionary,
+                            const IpcWriteOptions& options, IpcPayload* out) {
   out->type = MessageType::DICTIONARY_BATCH;
   // Frame of reference is 0, see ARROW-384
-  internal::DictionarySerializer assembler(id, /*buffer_start_offset=*/0, options, out);
+  internal::DictionarySerializer assembler(id, is_delta, /*buffer_start_offset=*/0,
+                                           options, out);
   return assembler.Assemble(dictionary);
 }
 
@@ -678,8 +683,7 @@ Status WriteStridedTensorData(int dim_index, int64_t offset, int elem_size,
 
 Status GetContiguousTensor(const Tensor& tensor, MemoryPool* pool,
                            std::unique_ptr<Tensor>* out) {
-  const auto& type = checked_cast<const FixedWidthType&>(*tensor.type());
-  const int elem_size = type.bit_width() / 8;
+  const int elem_size = GetByteWidth(*tensor.type());
 
   ARROW_ASSIGN_OR_RAISE(
       auto scratch_space,
@@ -701,8 +705,7 @@ Status GetContiguousTensor(const Tensor& tensor, MemoryPool* pool,
 
 Status WriteTensor(const Tensor& tensor, io::OutputStream* dst, int32_t* metadata_length,
                    int64_t* body_length) {
-  const auto& type = checked_cast<const FixedWidthType&>(*tensor.type());
-  const int elem_size = type.bit_width() / 8;
+  const int elem_size = GetByteWidth(*tensor.type());
 
   *body_length = tensor.size() * elem_size;
 
@@ -1215,6 +1218,19 @@ Result<std::unique_ptr<RecordBatchWriter>> OpenRecordBatchWriter(
   // XXX should we call Start()?
   return ::arrow::internal::make_unique<internal::IpcFormatWriter>(std::move(sink),
                                                                    schema, options);
+}
+
+Result<std::unique_ptr<IpcPayloadWriter>> MakePayloadStreamWriter(
+    io::OutputStream* sink, const IpcWriteOptions& options) {
+  return ::arrow::internal::make_unique<internal::PayloadStreamWriter>(sink, options);
+}
+
+Result<std::unique_ptr<IpcPayloadWriter>> MakePayloadFileWriter(
+    io::OutputStream* sink, const std::shared_ptr<Schema>& schema,
+    const IpcWriteOptions& options,
+    const std::shared_ptr<const KeyValueMetadata>& metadata) {
+  return ::arrow::internal::make_unique<internal::PayloadFileWriter>(options, schema,
+                                                                     metadata, sink);
 }
 
 }  // namespace internal

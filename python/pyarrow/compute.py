@@ -91,9 +91,46 @@ def _simple_unary_function(name):
     return func
 
 
+def _simple_binary_function(name):
+    def func(left, right):
+        return call_function(name, [left, right])
+    return func
+
+
 ascii_length = _simple_unary_function('ascii_length')
 ascii_upper = _simple_unary_function('ascii_upper')
 ascii_lower = _simple_unary_function('ascii_lower')
+utf8_upper = _simple_unary_function('utf8_upper')
+utf8_lower = _simple_unary_function('utf8_lower')
+
+is_valid = _simple_unary_function('is_valid')
+is_null = _simple_unary_function('is_null')
+
+list_flatten = _simple_unary_function('list_flatten')
+list_parent_indices = _simple_unary_function('list_parent_indices')
+list_value_lengths = _simple_unary_function('list_value_lengths')
+
+add = _simple_binary_function('add')
+subtract = _simple_binary_function('subtract')
+multiply = _simple_binary_function('multiply')
+
+
+def binary_contains_exact(array, pattern):
+    """
+    Test if pattern is contained within a value of a binary array.
+
+    Parameters
+    ----------
+    array : pyarrow.Array or pyarrow.ChunkedArray
+    pattern : str
+        pattern to search for exact matches
+
+    Returns
+    -------
+    result : pyarrow.Array or pyarrow.ChunkedArray
+    """
+    return call_function("binary_contains_exact", [array],
+                         _pc.BinaryContainsExactOptions(pattern))
 
 
 def sum(array):

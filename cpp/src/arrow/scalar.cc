@@ -22,6 +22,7 @@
 #include <utility>
 
 #include "arrow/array.h"
+#include "arrow/array/util.h"
 #include "arrow/buffer.h"
 #include "arrow/compare.h"
 #include "arrow/type.h"
@@ -169,10 +170,74 @@ FixedSizeListScalar::FixedSizeListScalar(std::shared_ptr<Array> value)
     : BaseListScalar(
           value, fixed_size_list(value->type(), static_cast<int32_t>(value->length()))) {}
 
+Result<std::shared_ptr<Scalar>> StructScalar::field(FieldRef ref) const {
+  ARROW_ASSIGN_OR_RAISE(auto path, ref.FindOne(*type));
+  if (path.indices().size() != 1) {
+    return Status::NotImplemented("retrieval of nested fields from StructScalar");
+  }
+  auto index = path.indices()[0];
+  if (is_valid) {
+    return value[index];
+  } else {
+    const auto& struct_type = checked_cast<const StructType&>(*this->type);
+    const auto& field_type = struct_type.field(index)->type();
+    return MakeNullScalar(field_type);
+  }
+}
+
 DictionaryScalar::DictionaryScalar(std::shared_ptr<DataType> type)
     : Scalar(std::move(type)),
-      value(
-          MakeNullScalar(checked_cast<const DictionaryType&>(*this->type).value_type())) {
+      value{MakeNullScalar(checked_cast<const DictionaryType&>(*this->type).index_type()),
+            MakeArrayOfNull(checked_cast<const DictionaryType&>(*this->type).value_type(),
+                            0)
+                .ValueOrDie()} {}
+
+Result<std::shared_ptr<Scalar>> DictionaryScalar::GetEncodedValue() const {
+  const auto& dict_type = checked_cast<DictionaryType&>(*type);
+
+  if (!is_valid) {
+    return MakeNullScalar(dict_type.value_type());
+  }
+
+  int64_t index_value = 0;
+  switch (dict_type.index_type()->id()) {
+    case Type::UINT8:
+      index_value =
+          static_cast<int64_t>(checked_cast<const UInt8Scalar&>(*value.index).value);
+      break;
+    case Type::INT8:
+      index_value =
+          static_cast<int64_t>(checked_cast<const Int8Scalar&>(*value.index).value);
+      break;
+    case Type::UINT16:
+      index_value =
+          static_cast<int64_t>(checked_cast<const UInt16Scalar&>(*value.index).value);
+      break;
+    case Type::INT16:
+      index_value =
+          static_cast<int64_t>(checked_cast<const Int16Scalar&>(*value.index).value);
+      break;
+    case Type::UINT32:
+      index_value =
+          static_cast<int64_t>(checked_cast<const UInt32Scalar&>(*value.index).value);
+      break;
+    case Type::INT32:
+      index_value =
+          static_cast<int64_t>(checked_cast<const Int32Scalar&>(*value.index).value);
+      break;
+    case Type::UINT64:
+      index_value =
+          static_cast<int64_t>(checked_cast<const UInt64Scalar&>(*value.index).value);
+      break;
+    case Type::INT64:
+      index_value =
+          static_cast<int64_t>(checked_cast<const Int64Scalar&>(*value.index).value);
+      break;
+    default:
+      return Status::TypeError("Not implemented dictionary index type");
+      break;
+  }
+  return value.dictionary->GetScalar(index_value);
 }
 
 template <typename T>
@@ -217,6 +282,11 @@ std::shared_ptr<Scalar> MakeNullScalar(std::shared_ptr<DataType> type) {
 std::string Scalar::ToString() const {
   if (!this->is_valid) {
     return "null";
+  }
+  if (type->id() == Type::DICTIONARY) {
+    auto dict_scalar = checked_cast<const DictionaryScalar*>(this);
+    return dict_scalar->value.dictionary->ToString() + "[" +
+           dict_scalar->value.index->ToString() + "]";
   }
   auto maybe_repr = CastTo(utf8());
   if (maybe_repr.ok()) {

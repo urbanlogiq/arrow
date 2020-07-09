@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <RcppCommon.h>
+
 #include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
-
-#include <RcppCommon.h>
 #undef Free
 
 namespace arrow {
@@ -32,10 +32,22 @@ struct symbols {
   static SEXP dot_Internal;
   static SEXP inspect;
   static SEXP row_names;
+  static SEXP serialize_arrow_r_metadata;
+  static SEXP as_list;
+  static SEXP ptype;
 };
 
 struct data {
   static SEXP classes_POSIXct;
+  static SEXP classes_metadata_r;
+
+  static SEXP names_metadata;
+  static SEXP classes_vctrs_list_of;
+  static SEXP empty_raw;
+};
+
+struct ns {
+  static SEXP arrow;
 };
 
 }  // namespace r
@@ -47,7 +59,7 @@ namespace internal {
 template <typename Pointer>
 Pointer r6_to_smart_pointer(SEXP self) {
   return reinterpret_cast<Pointer>(
-      EXTPTR_PTR(Rf_findVarInFrame(self, arrow::r::symbols::xp)));
+      R_ExternalPtrAddr(Rf_findVarInFrame(self, arrow::r::symbols::xp)));
 }
 
 }  // namespace internal
