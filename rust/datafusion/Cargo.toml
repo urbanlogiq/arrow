@@ -45,7 +45,7 @@ cli = ["rustyline"]
 
 [dependencies]
 fnv = "1.0"
-sqlparser = { git = "https://github.com/urbanlogiq/sqlparser-rs", branch="ul_sqlparser" }
+sqlparser = { git = "https://github.com/urbanlogiq/sqlparser-rs", branch="escape_singlequotes" }
 arrow = { path = "../arrow", version = "1.0.0-SNAPSHOT" }
 parquet = { path = "../parquet", version = "1.0.0-SNAPSHOT" }
 clap = "2.33"
