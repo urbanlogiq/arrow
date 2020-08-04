@@ -136,7 +136,7 @@ fn unnest_arrays_to_leaves(
             | ArrowDataType::Binary
             | ArrowDataType::FixedSizeBinary(_)
             | ArrowDataType::Utf8
-            | ArrowDataType::LargeBinary,
+            | ArrowDataType::LargeBinary
             | ArrowDataType::LargeUtf8 => {
                 let col_writer = row_group_writer.next_column()?;
                 if let Some(mut writer) = col_writer {
