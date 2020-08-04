@@ -19,7 +19,7 @@
 import collections
 
 
-cdef class Scalar:
+cdef class Scalar(_Weakrefable):
     """
     The base class for scalars.
     """
@@ -63,6 +63,19 @@ cdef class Scalar:
         """
         return self.wrapped.get().is_valid
 
+    def cast(self, object target_type):
+        """
+        Attempt a safe cast to target data type.
+        """
+        cdef:
+            DataType type = ensure_type(target_type)
+            shared_ptr[CScalar] result
+
+        with nogil:
+            result = GetResultValue(self.wrapped.get().CastTo(type.sp_type))
+
+        return Scalar.wrap(result)
+
     def __repr__(self):
         return '<pyarrow.{}: {!r}>'.format(
             self.__class__.__name__, self.as_py()
@@ -83,6 +96,9 @@ cdef class Scalar:
     def __hash__(self):
         cdef CScalarHash hasher
         return hasher(self.wrapped)
+
+    def __reduce__(self):
+        return scalar, (self.as_py(), self.type)
 
     def as_py(self):
         raise NotImplementedError()
@@ -653,21 +669,17 @@ cdef class MapScalar(ListScalar):
         Iterate over this element's values.
         """
         arr = self.values
-        if arr is None:
-            return iter(zip(arr.field('key'), arr.field('value')))
-        else:
+        if array is None:
             raise StopIteration
+        for k, v in zip(arr.field('key'), arr.field('value')):
+            yield (k.as_py(), v.as_py())
 
     def as_py(self):
         """
         Return this value as a Python list.
         """
-        arr = self.values
-        if arr is not None:
-            pairs = zip(arr.field('key'), arr.field('value'))
-            return [(k.as_py(), v.as_py()) for k, v in pairs]
-        else:
-            return None
+        cdef CStructScalar* sp = <CStructScalar*> self.wrapped.get()
+        return list(self) if sp.is_valid else None
 
 
 cdef class DictionaryScalar(Scalar):

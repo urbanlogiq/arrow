@@ -33,6 +33,7 @@
 namespace arrow {
 
 using internal::checked_cast;
+using internal::checked_pointer_cast;
 
 TEST(TestNullScalar, Basics) {
   NullScalar scalar;
@@ -47,7 +48,7 @@ TEST(TestNullScalar, Basics) {
 template <typename T>
 class TestNumericScalar : public ::testing::Test {
  public:
-  TestNumericScalar() {}
+  TestNumericScalar() = default;
 };
 
 TYPED_TEST_SUITE(TestNumericScalar, NumericArrowTypes);
@@ -198,7 +199,7 @@ TEST(TestStringScalar, MakeScalar) {
   ASSERT_EQ(StringScalar("three"), *three);
 
   // test Array.GetScalar
-  auto arr = ArrayFromJSON(utf8(), "[null, \"one\", \"two\"]");
+  auto arr = ArrayFromJSON(utf8(), R"([null, "one", "two"])");
   ASSERT_OK_AND_ASSIGN(auto null, arr->GetScalar(0));
   ASSERT_OK_AND_ASSIGN(auto one, arr->GetScalar(1));
   ASSERT_OK_AND_ASSIGN(auto two, arr->GetScalar(2));
@@ -221,7 +222,7 @@ TEST(TestFixedSizeBinaryScalar, Basics) {
 
   // test Array.GetScalar
   auto ty = fixed_size_binary(3);
-  auto arr = ArrayFromJSON(ty, "[null, \"one\", \"two\"]");
+  auto arr = ArrayFromJSON(ty, R"([null, "one", "two"])");
   ASSERT_OK_AND_ASSIGN(auto null, arr->GetScalar(0));
   ASSERT_OK_AND_ASSIGN(auto one, arr->GetScalar(1));
   ASSERT_OK_AND_ASSIGN(auto two, arr->GetScalar(2));
@@ -558,6 +559,18 @@ TYPED_TEST(TestNumericScalar, Cast) {
   }
 }
 
+TEST(TestMapScalar, Basics) {
+  auto value =
+      ArrayFromJSON(struct_({field("key", utf8(), false), field("value", int8())}),
+                    R"([{"key": "a", "value": 1}, {"key": "b", "value": 2}])");
+  auto scalar = MapScalar(value);
+
+  auto expected_scalar_type = map(utf8(), field("value", int8()));
+
+  ASSERT_TRUE(scalar.type->Equals(expected_scalar_type));
+  ASSERT_TRUE(value->Equals(scalar.value));
+}
+
 TEST(TestStructScalar, FieldAccess) {
   StructScalar abc({MakeScalar(true), MakeNullScalar(int32()), MakeScalar("hello"),
                     MakeNullScalar(int64())},
@@ -581,9 +594,9 @@ TEST(TestStructScalar, FieldAccess) {
 }
 
 TEST(TestDictionaryScalar, Basics) {
-  auto CheckIndexType = [&](const std::shared_ptr<DataType>& index_ty) {
+  for (auto index_ty : all_dictionary_index_types()) {
     auto ty = dictionary(index_ty, utf8());
-    auto dict = ArrayFromJSON(utf8(), "[\"alpha\", \"beta\", \"gamma\"]");
+    auto dict = ArrayFromJSON(utf8(), R"(["alpha", "beta", "gamma"])");
 
     DictionaryScalar::ValueType alpha;
     ASSERT_OK_AND_ASSIGN(alpha.index, MakeScalar(index_ty, 0));
@@ -621,10 +634,34 @@ TEST(TestDictionaryScalar, Basics) {
     ASSERT_TRUE(first->Equals(scalar_gamma));
     ASSERT_TRUE(second->Equals(scalar_alpha));
     ASSERT_TRUE(last->Equals(scalar_null));
-  };
+  }
+}
 
-  for (auto ty : all_dictionary_index_types()) {
-    CheckIndexType(ty);
+TEST(TestDictionaryScalar, Cast) {
+  for (auto index_ty : all_dictionary_index_types()) {
+    auto ty = dictionary(index_ty, utf8());
+    auto dict = checked_pointer_cast<StringArray>(
+        ArrayFromJSON(utf8(), R"(["alpha", "beta", "gamma"])"));
+
+    for (int64_t i = 0; i < dict->length(); ++i) {
+      auto alpha = MakeScalar(dict->GetString(i));
+      ASSERT_OK_AND_ASSIGN(auto cast_alpha, alpha->CastTo(ty));
+      ASSERT_OK_AND_ASSIGN(
+          auto roundtripped_alpha,
+          checked_cast<const DictionaryScalar&>(*cast_alpha).GetEncodedValue());
+
+      ASSERT_OK_AND_ASSIGN(auto i_scalar, MakeScalar(index_ty, i));
+      auto alpha_dict = DictionaryScalar({i_scalar, dict}, ty);
+      ASSERT_OK_AND_ASSIGN(
+          auto encoded_alpha,
+          checked_cast<const DictionaryScalar&>(alpha_dict).GetEncodedValue());
+
+      AssertScalarsEqual(*alpha, *roundtripped_alpha);
+      AssertScalarsEqual(*encoded_alpha, *roundtripped_alpha);
+
+      // dictionaries differ, though encoded values are identical
+      ASSERT_FALSE(alpha_dict.Equals(cast_alpha));
+    }
   }
 }
 
@@ -641,7 +678,7 @@ TEST(TestSparseUnionScalar, Basics) {
 
   // test Array.GetScalar
   std::vector<std::shared_ptr<Array>> children{
-      ArrayFromJSON(utf8(), "[\"alpha\", \"\", \"beta\", null, \"gamma\"]"),
+      ArrayFromJSON(utf8(), R"(["alpha", "", "beta", null, "gamma"])"),
       ArrayFromJSON(uint64(), "[1, 2, 11, 22, null]")};
 
   auto type_ids = ArrayFromJSON(int8(), "[0, 1, 0, 0, 1]");
@@ -697,7 +734,7 @@ TEST(TestDenseUnionScalar, Basics) {
 
   // test Array.GetScalar
   std::vector<std::shared_ptr<Array>> children = {
-      ArrayFromJSON(utf8(), "[\"alpha\", \"beta\", null]"),
+      ArrayFromJSON(utf8(), R"(["alpha", "beta", null])"),
       ArrayFromJSON(uint64(), "[2, 3]")};
 
   auto type_ids = ArrayFromJSON(int8(), "[0, 1, 0, 0, 1]");

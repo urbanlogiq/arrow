@@ -17,7 +17,9 @@
 
 import datetime
 import decimal
+import pickle
 import pytest
+import weakref
 
 import numpy as np
 
@@ -40,14 +42,29 @@ import pyarrow as pa
     (1.0, None, pa.DoubleScalar, pa.DoubleValue),
     (np.float16(1.0), pa.float16(), pa.HalfFloatScalar, pa.HalfFloatValue),
     (1.0, pa.float32(), pa.FloatScalar, pa.FloatValue),
+    (decimal.Decimal("1.123"), None, pa.Decimal128Scalar, pa.Decimal128Value),
     ("string", None, pa.StringScalar, pa.StringValue),
     (b"bytes", None, pa.BinaryScalar, pa.BinaryValue),
+    ("largestring", pa.large_string(), pa.LargeStringScalar,
+     pa.LargeStringValue),
+    (b"largebytes", pa.large_binary(), pa.LargeBinaryScalar,
+     pa.LargeBinaryValue),
+    (b"abc", pa.binary(3), pa.FixedSizeBinaryScalar, pa.FixedSizeBinaryValue),
     ([1, 2, 3], None, pa.ListScalar, pa.ListValue),
     ([1, 2, 3, 4], pa.large_list(pa.int8()), pa.LargeListScalar,
      pa.LargeListValue),
+    ([1, 2, 3, 4, 5], pa.list_(pa.int8(), 5), pa.FixedSizeListScalar,
+     pa.FixedSizeListValue),
     (datetime.date.today(), None, pa.Date32Scalar, pa.Date32Value),
+    (datetime.date.today(), pa.date64(), pa.Date64Scalar, pa.Date64Value),
     (datetime.datetime.now(), None, pa.TimestampScalar, pa.TimestampValue),
-    ({'a': 1, 'b': [1, 2]}, None, pa.StructScalar, pa.StructValue)
+    (datetime.datetime.now().time().replace(microsecond=0), pa.time32('s'),
+     pa.Time32Scalar, pa.Time32Value),
+    (datetime.datetime.now().time(), None, pa.Time64Scalar, pa.Time64Value),
+    (datetime.timedelta(days=1), None, pa.DurationScalar, pa.DurationValue),
+    ({'a': 1, 'b': [1, 2]}, None, pa.StructScalar, pa.StructValue),
+    ([('a', 1), ('b', 2)], pa.map_(pa.string(), pa.int8()), pa.MapScalar,
+     pa.MapValue),
 ])
 def test_basics(value, ty, klass, deprecated):
     s = pa.scalar(value, type=ty)
@@ -65,6 +82,16 @@ def test_basics(value, ty, klass, deprecated):
     assert s.is_valid is False
     assert s.as_py() is None
     assert s != pa.scalar(value, type=ty)
+
+    # test pickle roundtrip
+    restored = pickle.loads(pickle.dumps(s))
+    assert s.equals(restored)
+
+    # test that scalars are weak-referenceable
+    wr = weakref.ref(s)
+    assert wr() is not None
+    del s
+    assert wr() is None
 
 
 def test_null_singleton():
@@ -86,6 +113,16 @@ def test_nulls():
     for v in arr:
         assert v is pa.NA
         assert v.as_py() is None
+
+    # test pickle roundtrip
+    restored = pickle.loads(pickle.dumps(null))
+    assert restored.equals(null)
+
+    # test that scalars are weak-referenceable
+    wr = weakref.ref(null)
+    assert wr() is not None
+    del null
+    assert wr() is not None  # singleton
 
 
 def test_hashing():
@@ -177,6 +214,15 @@ def test_time():
         for t in [t1, t2]:
             s = pa.scalar(t, type=ty)
             assert s.as_py() == t
+
+
+def test_cast():
+    val = pa.scalar(5, type='int8')
+    assert val.cast('int64') == pa.scalar(5, type='int64')
+    assert val.cast('uint32') == pa.scalar(5, type='uint32')
+    assert val.cast('string') == pa.scalar('5', type='string')
+    with pytest.raises(ValueError):
+        pa.scalar('foo').cast('int32')
 
 
 @pytest.mark.pandas
@@ -344,7 +390,7 @@ def test_list(ty, klass):
     assert s.type == ty
     assert len(s) == 2
     assert isinstance(s.values, pa.Array)
-    assert s.values == v
+    assert s.values.to_pylist() == v
     assert isinstance(s, klass)
     assert repr(v) in repr(s)
     assert s.as_py() == v
@@ -459,6 +505,15 @@ def test_map():
     assert isinstance(s, pa.MapScalar)
     assert isinstance(s.values, pa.Array)
     assert repr(s) == "<pyarrow.MapScalar: [('a', 1), ('b', 2)]>"
+    assert s.values.to_pylist() == [
+        {'key': 'a', 'value': 1},
+        {'key': 'b', 'value': 2}
+    ]
+
+    # test iteration
+    for i, j in zip(s, v):
+        assert i == j
+
     assert s.as_py() == v
     assert s[1] == (
         pa.scalar('b', type=pa.string()),
@@ -470,6 +525,9 @@ def test_map():
         s[-3]
     with pytest.raises(IndexError):
         s[2]
+
+    restored = pickle.loads(pickle.dumps(s))
+    assert restored.equals(s)
 
 
 def test_dictionary():
@@ -485,9 +543,53 @@ def test_dictionary():
         assert s.as_py() == v
         assert s.value.as_py() == v
         assert s.index.as_py() == i
-        assert s.dictionary == dictionary
+        assert s.dictionary.to_pylist() == dictionary
 
         with pytest.warns(FutureWarning):
             assert s.index_value.as_py() == i
         with pytest.warns(FutureWarning):
             assert s.dictionary_value.as_py() == v
+
+    with pytest.raises(pa.ArrowNotImplementedError):
+        pickle.loads(pickle.dumps(s))
+
+
+def test_union():
+    # sparse
+    arr = pa.UnionArray.from_sparse(
+        pa.array([0, 0, 1, 1], type=pa.int8()),
+        [
+            pa.array(["a", "b", "c", "d"]),
+            pa.array([1, 2, 3, 4])
+        ]
+    )
+    for s in arr:
+        assert isinstance(s, pa.UnionScalar)
+        assert s.type.equals(arr.type)
+        assert s.is_valid is True
+        with pytest.raises(pa.ArrowNotImplementedError):
+            pickle.loads(pickle.dumps(s))
+
+    assert arr[0].as_py() == "a"
+    assert arr[1].as_py() == "b"
+    assert arr[2].as_py() == 3
+    assert arr[3].as_py() == 4
+
+    # dense
+    arr = pa.UnionArray.from_dense(
+        types=pa.array([0, 1, 0, 0, 1, 1, 0], type='int8'),
+        value_offsets=pa.array([0, 0, 2, 1, 1, 2, 3], type='int32'),
+        children=[
+            pa.array([b'a', b'b', b'c', b'd'], type='binary'),
+            pa.array([1, 2, 3], type='int64')
+        ]
+    )
+    for s in arr:
+        assert isinstance(s, pa.UnionScalar)
+        assert s.type.equals(arr.type)
+        assert s.is_valid is True
+        with pytest.raises(pa.ArrowNotImplementedError):
+            pickle.loads(pickle.dumps(s))
+
+    assert arr[0].as_py() == b'a'
+    assert arr[5].as_py() == 3

@@ -25,6 +25,7 @@
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
 #![allow(bare_trait_objects)]
+#![warn(missing_debug_implementations)]
 
 pub mod array;
 pub mod bitmap;
@@ -33,8 +34,6 @@ pub mod compute;
 pub mod csv;
 pub mod datatypes;
 pub mod error;
-#[cfg(feature = "flight")]
-pub mod flight;
 #[allow(clippy::redundant_closure)]
 #[allow(clippy::needless_lifetimes)]
 #[allow(clippy::extra_unused_lifetimes)]

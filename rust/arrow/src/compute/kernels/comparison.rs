@@ -60,7 +60,7 @@ macro_rules! compare_op {
             $left.len(),
             None,
             null_bit_buffer,
-            $left.offset(),
+            0,
             vec![result.finish()],
             vec![],
         );
@@ -81,7 +81,7 @@ macro_rules! compare_op_scalar {
             $left.len(),
             None,
             null_bit_buffer,
-            $left.offset(),
+            0,
             vec![result.finish()],
             vec![],
         );
@@ -154,7 +154,7 @@ pub fn like_utf8(left: &StringArray, right: &StringArray) -> Result<BooleanArray
         left.len(),
         None,
         null_bit_buffer,
-        left.offset(),
+        0,
         vec![result.finish()],
         vec![],
     );
@@ -202,7 +202,7 @@ pub fn nlike_utf8(left: &StringArray, right: &StringArray) -> Result<BooleanArra
         left.len(),
         None,
         null_bit_buffer,
-        left.offset(),
+        0,
         vec![result.finish()],
         vec![],
     );
@@ -316,7 +316,7 @@ where
         left.len(),
         None,
         null_bit_buffer,
-        left.offset(),
+        0,
         vec![result.freeze()],
         vec![],
     );
@@ -369,7 +369,7 @@ where
         left.len(),
         None,
         null_bit_buffer,
-        left.offset(),
+        0,
         vec![result.freeze()],
         vec![],
     );
@@ -745,6 +745,20 @@ mod tests {
         assert_eq!(true, c.value(2));
         assert_eq!(false, c.value(3));
         assert_eq!(false, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_eq_with_slice() {
+        let a = Int32Array::from(vec![6, 7, 8, 8, 10]);
+        let b = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let b_slice = b.slice(5, 5);
+        let c = b_slice.as_any().downcast_ref().unwrap();
+        let d = eq(&c, &a).unwrap();
+        assert_eq!(true, d.value(0));
+        assert_eq!(true, d.value(1));
+        assert_eq!(true, d.value(2));
+        assert_eq!(false, d.value(3));
+        assert_eq!(true, d.value(4));
     }
 
     #[test]

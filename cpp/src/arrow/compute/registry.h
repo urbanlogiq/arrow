@@ -54,6 +54,10 @@ class ARROW_EXPORT FunctionRegistry {
   /// function with the same name is already registered
   Status AddFunction(std::shared_ptr<Function> function, bool allow_overwrite = false);
 
+  /// \brief Add aliases for the given function name. Returns Status::KeyError if the
+  /// function with the given name is not registered
+  Status AddAlias(const std::string& target_name, const std::string& source_name);
+
   /// \brief Retrieve a function by name from the registry
   Result<std::shared_ptr<Function>> GetFunction(const std::string& name) const;
 
@@ -72,7 +76,7 @@ class ARROW_EXPORT FunctionRegistry {
   std::unique_ptr<FunctionRegistryImpl> impl_;
 };
 
-// \brief Return the process-global function registry
+/// \brief Return the process-global function registry
 ARROW_EXPORT FunctionRegistry* GetFunctionRegistry();
 
 }  // namespace compute

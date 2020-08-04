@@ -77,7 +77,7 @@ cdef CFileSource _make_file_source(object file, FileSystem filesystem=None):
     return c_source
 
 
-cdef class Expression:
+cdef class Expression(_Weakrefable):
 
     cdef:
         shared_ptr[CExpression] wrapped
@@ -234,7 +234,7 @@ _deserialize = Expression._deserialize
 cdef Expression _true = Expression._scalar(True)
 
 
-cdef class Dataset:
+cdef class Dataset(_Weakrefable):
     """
     Collection of data fragments and potentially child datasets.
 
@@ -584,7 +584,7 @@ cdef shared_ptr[CExpression] _insert_implicit_casts(Expression filter,
     )
 
 
-cdef class FileFormat:
+cdef class FileFormat(_Weakrefable):
 
     cdef:
         shared_ptr[CFileFormat] wrapped
@@ -647,7 +647,7 @@ cdef class FileFormat:
             return False
 
 
-cdef class Fragment:
+cdef class Fragment(_Weakrefable):
     """Fragment of data from a Dataset."""
 
     cdef:
@@ -839,7 +839,7 @@ cdef class FileFragment(Fragment):
         return FileFormat.wrap(self.file_fragment.format())
 
 
-cdef class RowGroupInfo:
+cdef class RowGroupInfo(_Weakrefable):
     """A wrapper class for RowGroup information"""
 
     cdef:
@@ -865,6 +865,10 @@ cdef class RowGroupInfo:
     @property
     def num_rows(self):
         return self.info.num_rows()
+
+    @property
+    def total_byte_size(self):
+        return self.info.total_byte_size()
 
     @property
     def statistics(self):
@@ -909,12 +913,23 @@ cdef class ParquetFileFragment(FileFragment):
 
     def __reduce__(self):
         buffer = self.buffer
+        if self.row_groups is not None:
+            row_groups = [row_group.id for row_group in self.row_groups]
+        else:
+            row_groups = None
         return self.format.make_fragment, (
             self.path if buffer is None else buffer,
             self.filesystem,
             self.partition_expression,
-            self.row_groups
+            row_groups
         )
+
+    def ensure_complete_metadata(self):
+        """
+        Ensure that all metadata (statistics, physical schema, ...) have
+        been read and cached in this fragment.
+        """
+        check_status(self.parquet_file_fragment.EnsureCompleteMetadata())
 
     @property
     def row_groups(self):
@@ -961,7 +976,7 @@ cdef class ParquetFileFragment(FileFragment):
         return [Fragment.wrap(c_fragment) for c_fragment in c_fragments]
 
 
-cdef class ParquetReadOptions:
+cdef class ParquetReadOptions(_Weakrefable):
     """
     Parquet format specific options for reading.
 
@@ -1118,7 +1133,7 @@ cdef class CsvFileFormat(FileFormat):
         return CsvFileFormat, (self.parse_options,)
 
 
-cdef class Partitioning:
+cdef class Partitioning(_Weakrefable):
 
     cdef:
         shared_ptr[CPartitioning] wrapped
@@ -1162,7 +1177,7 @@ cdef class Partitioning:
         return pyarrow_wrap_schema(self.partitioning.schema())
 
 
-cdef class PartitioningFactory:
+cdef class PartitioningFactory(_Weakrefable):
 
     cdef:
         shared_ptr[CPartitioningFactory] wrapped
@@ -1341,7 +1356,7 @@ cdef class HivePartitioning(Partitioning):
             CHivePartitioning.MakeFactory(options))
 
 
-cdef class DatasetFactory:
+cdef class DatasetFactory(_Weakrefable):
     """
     DatasetFactory is used to create a Dataset, inspect the Schema
     of the fragments contained in it, and declare a partitioning.
@@ -1436,7 +1451,7 @@ cdef class DatasetFactory:
         return Dataset.wrap(GetResultValue(result))
 
 
-cdef class FileSystemFactoryOptions:
+cdef class FileSystemFactoryOptions(_Weakrefable):
     """
     Influences the discovery of filesystem paths.
 
@@ -1640,7 +1655,7 @@ cdef class UnionDatasetFactory(DatasetFactory):
         self.union_factory = <CUnionDatasetFactory*> sp.get()
 
 
-cdef class ParquetFactoryOptions:
+cdef class ParquetFactoryOptions(_Weakrefable):
     """
     Influences the discovery of parquet dataset.
 
@@ -1763,7 +1778,7 @@ cdef class ParquetDatasetFactory(DatasetFactory):
         self.parquet_factory = <CParquetDatasetFactory*> sp.get()
 
 
-cdef class ScanTask:
+cdef class ScanTask(_Weakrefable):
     """Read record batches from a range of a single data fragment.
 
     A ScanTask is meant to be a unit of work to be dispatched.
@@ -1799,8 +1814,12 @@ cdef class ScanTask:
         -------
         record_batches : iterator of RecordBatch
         """
-        for maybe_batch in GetResultValue(self.task.Execute()):
-            yield pyarrow_wrap_batch(GetResultValue(move(maybe_batch)))
+        cdef shared_ptr[CRecordBatch] record_batch
+        with nogil:
+            for maybe_batch in GetResultValue(self.task.Execute()):
+                record_batch = GetResultValue(move(maybe_batch))
+                with gil:
+                    yield pyarrow_wrap_batch(record_batch)
 
 
 cdef shared_ptr[CScanContext] _build_scan_context(bint use_threads=True,
@@ -1832,7 +1851,7 @@ cdef void _populate_builder(const shared_ptr[CScannerBuilder]& ptr,
     check_status(builder.BatchSize(batch_size))
 
 
-cdef class Scanner:
+cdef class Scanner(_Weakrefable):
     """A materialized scan operation with context and options bound.
 
     A scanner is the class that glues the scan tasks, data fragments and data
@@ -1980,3 +1999,26 @@ cdef class Scanner:
         cdef CFragmentIterator c_fragments = self.scanner.GetFragments()
         for maybe_fragment in c_fragments:
             yield Fragment.wrap(GetResultValue(move(maybe_fragment)))
+
+
+def _get_partition_keys(Expression partition_expression):
+    """
+    Extract partition keys (equality constraints between a field and a scalar)
+    from an expression as a dict mapping the field's name to its value.
+
+    NB: All expressions yielded by a HivePartitioning or DirectoryPartitioning
+    will be conjunctions of equality conditions and are accessible through this
+    function. Other subexpressions will be ignored.
+
+    For example, an expression of
+    <pyarrow.dataset.Expression ((part == A:string) and (year == 2016:int32))>
+    is converted to {'part': 'a', 'year': 2016}
+    """
+    cdef:
+        shared_ptr[CExpression] expr = partition_expression.unwrap()
+        pair[c_string, shared_ptr[CScalar]] name_val
+
+    return {
+        frombytes(name_val.first): pyarrow_wrap_scalar(name_val.second).as_py()
+        for name_val in GetResultValue(CGetPartitionKeys(deref(expr.get())))
+    }

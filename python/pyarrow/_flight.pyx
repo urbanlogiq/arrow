@@ -35,7 +35,7 @@ from pyarrow.lib cimport *
 from pyarrow.lib import ArrowException, ArrowInvalid
 from pyarrow.lib import as_buffer, frombytes, tobytes
 from pyarrow.includes.libarrow_flight cimport *
-from pyarrow.ipc import _ReadPandasOption
+from pyarrow.ipc import _ReadPandasOption, _get_legacy_format_default
 import pyarrow.lib as lib
 
 
@@ -96,24 +96,34 @@ def _munge_grpc_python_error(message):
         return message
 
 
-cdef class FlightCallOptions:
+cdef IpcWriteOptions _get_options(options):
+    return <IpcWriteOptions> _get_legacy_format_default(
+        use_legacy_format=None, options=options)
+
+
+cdef class FlightCallOptions(_Weakrefable):
     """RPC-layer options for a Flight call."""
 
     cdef:
         CFlightCallOptions options
 
-    def __init__(self, timeout=None):
+    def __init__(self, timeout=None, write_options=None):
         """Create call options.
 
         Parameters
         ----------
-        timeout : float or None
+        timeout : float, None
             A timeout for the call, in seconds. None means that the
             timeout defaults to an implementation-specific value.
+        write_options : pyarrow.ipc.IpcWriteOptions, optional
+            IPC write options. The default options can be controlled
+            by environment variables (see pyarrow.ipc).
 
         """
+        cdef IpcWriteOptions options = _get_options(write_options)
         if timeout is not None:
             self.options.timeout = CTimeoutDuration(timeout)
+        self.options.write_options = options.c_options
 
     @staticmethod
     cdef CFlightCallOptions* unwrap(obj):
@@ -194,7 +204,7 @@ class FlightWriteSizeExceededError(ArrowInvalid):
         self.actual = actual
 
 
-cdef class Action:
+cdef class Action(_Weakrefable):
     """An action executable on a Flight service."""
     cdef:
         CAction action
@@ -245,7 +255,7 @@ class ActionType(_ActionType):
         return Action(self.type, buf)
 
 
-cdef class Result:
+cdef class Result(_Weakrefable):
     """A result from executing an Action."""
     cdef:
         unique_ptr[CFlightResult] result
@@ -266,7 +276,7 @@ cdef class Result:
         return pyarrow_wrap_buffer(self.result.get().body)
 
 
-cdef class BasicAuth:
+cdef class BasicAuth(_Weakrefable):
     """A container for basic auth."""
     cdef:
         unique_ptr[CBasicAuth] basic_auth
@@ -368,7 +378,7 @@ cdef wrap_flight_method(CFlightMethod method):
     return FlightMethod.INVALID
 
 
-cdef class FlightDescriptor:
+cdef class FlightDescriptor(_Weakrefable):
     """A description of a data stream available from a Flight service."""
     cdef:
         CFlightDescriptor descriptor
@@ -466,7 +476,7 @@ cdef class FlightDescriptor:
         return self.descriptor == other.descriptor
 
 
-cdef class Ticket:
+cdef class Ticket(_Weakrefable):
     """A ticket for requesting a Flight stream."""
 
     cdef:
@@ -514,7 +524,7 @@ cdef class Ticket:
         return '<Ticket {}>'.format(self.ticket.ticket)
 
 
-cdef class Location:
+cdef class Location(_Weakrefable):
     """The location of a Flight service."""
     cdef:
         CLocation location
@@ -587,7 +597,7 @@ cdef class Location:
         return (<Location> location).location
 
 
-cdef class FlightEndpoint:
+cdef class FlightEndpoint(_Weakrefable):
     """A Flight stream, along with the ticket and locations to access it."""
     cdef:
         CFlightEndpoint endpoint
@@ -642,7 +652,7 @@ cdef class FlightEndpoint:
         return self.endpoint == other.endpoint
 
 
-cdef class SchemaResult:
+cdef class SchemaResult(_Weakrefable):
     """A result from a getschema request. Holding a schema"""
     cdef:
         unique_ptr[CSchemaResult] result
@@ -670,7 +680,7 @@ cdef class SchemaResult:
         return pyarrow_wrap_schema(schema)
 
 
-cdef class FlightInfo:
+cdef class FlightInfo(_Weakrefable):
     """A description of a Flight stream."""
     cdef:
         unique_ptr[CFlightInfo] info
@@ -777,7 +787,7 @@ cdef class FlightInfo:
         return info
 
 
-cdef class FlightStreamChunk:
+cdef class FlightStreamChunk(_Weakrefable):
     """A RecordBatch with application metadata on the side."""
     cdef:
         CFlightStreamChunk chunk
@@ -802,7 +812,7 @@ cdef class FlightStreamChunk:
             self.chunk.data != NULL, self.chunk.app_metadata != NULL)
 
 
-cdef class _MetadataRecordBatchReader:
+cdef class _MetadataRecordBatchReader(_Weakrefable):
     """A reader for Flight streams."""
 
     # Needs to be separate class so the "real" class can subclass the
@@ -882,11 +892,13 @@ cdef class MetadataRecordBatchWriter(_CRecordBatchWriter):
     cdef CMetadataRecordBatchWriter* _writer(self) nogil:
         return <CMetadataRecordBatchWriter*> self.writer.get()
 
-    def begin(self, schema: Schema):
+    def begin(self, schema: Schema, options=None):
         """Prepare to write data to this stream with the given schema."""
-        cdef shared_ptr[CSchema] c_schema = pyarrow_unwrap_schema(schema)
+        cdef:
+            shared_ptr[CSchema] c_schema = pyarrow_unwrap_schema(schema)
+            CIpcWriteOptions c_options = _get_options(options).c_options
         with nogil:
-            check_flight_status(self._writer().Begin(c_schema))
+            check_flight_status(self._writer().Begin(c_schema, c_options))
 
     def write_metadata(self, buf):
         """Write Flight metadata by itself."""
@@ -939,7 +951,7 @@ cdef class FlightStreamWriter(MetadataRecordBatchWriter):
                 (<CFlightStreamWriter*> self.writer.get()).DoneWriting())
 
 
-cdef class FlightMetadataReader:
+cdef class FlightMetadataReader(_Weakrefable):
     """A reader for Flight metadata messages sent during a DoPut."""
 
     cdef:
@@ -955,7 +967,7 @@ cdef class FlightMetadataReader:
         return pyarrow_wrap_buffer(buf)
 
 
-cdef class FlightMetadataWriter:
+cdef class FlightMetadataWriter(_Weakrefable):
     """A sender for Flight metadata messages during a DoPut."""
 
     cdef:
@@ -974,7 +986,7 @@ cdef class FlightMetadataWriter:
             check_flight_status(self.writer.get().WriteMetadata(deref(buf)))
 
 
-cdef class FlightClient:
+cdef class FlightClient(_Weakrefable):
     """A client to a Flight service.
 
     Connect to a Flight service on the given host and port.
@@ -1327,7 +1339,7 @@ cdef class FlightClient:
         return py_writer, py_reader
 
 
-cdef class FlightDataStream:
+cdef class FlightDataStream(_Weakrefable):
     """Abstract base class for Flight data streams."""
 
     cdef CFlightDataStream* to_stream(self) except *:
@@ -1343,19 +1355,22 @@ cdef class RecordBatchStream(FlightDataStream):
     """A Flight data stream backed by RecordBatches."""
     cdef:
         object data_source
+        CIpcWriteOptions write_options
 
-    def __init__(self, data_source):
+    def __init__(self, data_source, options=None):
         """Create a RecordBatchStream from a data source.
 
         Parameters
         ----------
         data_source : RecordBatchReader or Table
+        options : pyarrow.ipc.IpcWriteOptions, optional
         """
         if (not isinstance(data_source, _CRecordBatchReader) and
                 not isinstance(data_source, lib.Table)):
             raise TypeError("Expected RecordBatchReader or Table, "
                             "but got: {}".format(type(data_source)))
         self.data_source = data_source
+        self.write_options = _get_options(options).c_options
 
     cdef CFlightDataStream* to_stream(self) except *:
         cdef:
@@ -1368,7 +1383,7 @@ cdef class RecordBatchStream(FlightDataStream):
         else:
             raise RuntimeError("Can't construct RecordBatchStream "
                                "from type {}".format(type(self.data_source)))
-        return new CRecordBatchStream(reader)
+        return new CRecordBatchStream(reader, self.write_options)
 
 
 cdef class GeneratorStream(FlightDataStream):
@@ -1379,8 +1394,9 @@ cdef class GeneratorStream(FlightDataStream):
         # A substream currently being consumed by the client, if
         # present. Produced by the generator.
         unique_ptr[CFlightDataStream] current_stream
+        CIpcWriteOptions c_options
 
-    def __init__(self, schema, generator):
+    def __init__(self, schema, generator, options=None):
         """Create a GeneratorStream from a Python generator.
 
         Parameters
@@ -1391,17 +1407,21 @@ cdef class GeneratorStream(FlightDataStream):
         generator : iterator or iterable
             The generator should yield other FlightDataStream objects,
             Tables, RecordBatches, or RecordBatchReaders.
+
+        options : pyarrow.ipc.IpcWriteOptions, optional
         """
         self.schema = pyarrow_unwrap_schema(schema)
         self.generator = iter(generator)
+        self.c_options = _get_options(options).c_options
 
     cdef CFlightDataStream* to_stream(self) except *:
         cdef:
             function[cb_data_stream_next] callback = &_data_stream_next
-        return new CPyGeneratorFlightDataStream(self, self.schema, callback)
+        return new CPyGeneratorFlightDataStream(self, self.schema, callback,
+                                                self.c_options)
 
 
-cdef class ServerCallContext:
+cdef class ServerCallContext(_Weakrefable):
     """Per-call state/context."""
     cdef:
         const CServerCallContext* context
@@ -1443,7 +1463,7 @@ cdef class ServerCallContext:
         return result
 
 
-cdef class ServerAuthReader:
+cdef class ServerAuthReader(_Weakrefable):
     """A reader for messages from the client during an auth handshake."""
     cdef:
         CServerAuthReader* reader
@@ -1474,7 +1494,7 @@ cdef class ServerAuthReader:
         return result
 
 
-cdef class ServerAuthSender:
+cdef class ServerAuthSender(_Weakrefable):
     """A writer for messages to the client during an auth handshake."""
     cdef:
         CServerAuthSender* sender
@@ -1504,7 +1524,7 @@ cdef class ServerAuthSender:
         return result
 
 
-cdef class ClientAuthReader:
+cdef class ClientAuthReader(_Weakrefable):
     """A reader for messages from the server during an auth handshake."""
     cdef:
         CClientAuthReader* reader
@@ -1535,7 +1555,7 @@ cdef class ClientAuthReader:
         return result
 
 
-cdef class ClientAuthSender:
+cdef class ClientAuthSender(_Weakrefable):
     """A writer for messages to the server during an auth handshake."""
     cdef:
         CClientAuthSender* sender
@@ -1569,8 +1589,6 @@ cdef CStatus _data_stream_next(void* self, CFlightPayload* payload) except *:
     """Callback for implementing FlightDataStream in Python."""
     cdef:
         unique_ptr[CFlightDataStream] data_stream
-        # TODO make it possible to pass IPC options around?
-        cdef CIpcWriteOptions c_ipc_options = CIpcWriteOptions.Defaults()
 
     py_stream = <object> self
     if not isinstance(py_stream, GeneratorStream):
@@ -1631,7 +1649,7 @@ cdef CStatus _data_stream_next(void* self, CFlightPayload* payload) except *:
                                                             stream_schema))
         check_flight_status(GetRecordBatchPayload(
             deref(batch.batch),
-            c_ipc_options,
+            stream.c_options,
             &payload.ipc_message))
         if metadata:
             payload.app_metadata = pyarrow_unwrap_buffer(as_buffer(metadata))
@@ -1988,7 +2006,7 @@ cdef CStatus _client_middleware_start_call(
     return CStatus_OK()
 
 
-cdef class ServerAuthHandler:
+cdef class ServerAuthHandler(_Weakrefable):
     """Authentication middleware for a server.
 
     To implement an authentication mechanism, subclass this class and
@@ -2032,7 +2050,7 @@ cdef class ServerAuthHandler:
         return new PyServerAuthHandler(self, vtable)
 
 
-cdef class ClientAuthHandler:
+cdef class ClientAuthHandler(_Weakrefable):
     """Authentication plugin for a client."""
 
     def authenticate(self, outgoing, incoming):
@@ -2070,7 +2088,7 @@ cdef wrap_call_info(const CCallInfo& c_info):
     return CallInfo(method=method)
 
 
-cdef class ClientMiddlewareFactory:
+cdef class ClientMiddlewareFactory(_Weakrefable):
     """A factory for new middleware instances.
 
     All middleware methods will be called from the same thread as the
@@ -2098,7 +2116,7 @@ cdef class ClientMiddlewareFactory:
         """
 
 
-cdef class ClientMiddleware:
+cdef class ClientMiddleware(_Weakrefable):
     """Client-side middleware for a call, instantiated per RPC.
 
     Methods here should be fast and must be infallible: they should
@@ -2159,7 +2177,7 @@ cdef class ClientMiddleware:
         c_instance[0].reset(new CPyClientMiddleware(py_middleware, vtable))
 
 
-cdef class ServerMiddlewareFactory:
+cdef class ServerMiddlewareFactory(_Weakrefable):
     """A factory for new middleware instances.
 
     All middleware methods will be called from the same thread as the
@@ -2197,7 +2215,7 @@ cdef class ServerMiddlewareFactory:
         """
 
 
-cdef class ServerMiddleware:
+cdef class ServerMiddleware(_Weakrefable):
     """Server-side middleware for a call, instantiated per RPC.
 
     Methods here should be fast and must be infalliable: they should
@@ -2289,7 +2307,7 @@ cdef class _ServerMiddlewareWrapper(ServerMiddleware):
             instance.call_completed(exception)
 
 
-cdef class FlightServerBase:
+cdef class FlightServerBase(_Weakrefable):
     """A Flight service definition.
 
     Override methods to define your Flight service.

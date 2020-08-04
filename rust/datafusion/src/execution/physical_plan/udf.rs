@@ -17,6 +17,8 @@
 
 //! UDF support
 
+use std::fmt;
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 
@@ -27,7 +29,7 @@ use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
 /// Scalar UDF
-pub type ScalarUdf = fn(input: &[ArrayRef]) -> Result<ArrayRef>;
+pub type ScalarUdf = Arc<dyn Fn(&[ArrayRef]) -> Result<ArrayRef> + Send + Sync>;
 
 /// Scalar UDF Expression
 #[derive(Clone)]
@@ -61,8 +63,8 @@ impl ScalarFunction {
 
 /// Scalar UDF Physical Expression
 pub struct ScalarFunctionExpr {
-    name: String,
     fun: Box<ScalarUdf>,
+    name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
 }
@@ -76,19 +78,30 @@ impl ScalarFunctionExpr {
         return_type: &DataType,
     ) -> Self {
         Self {
-            name: name.to_owned(),
             fun,
+            name: name.to_owned(),
             args,
             return_type: return_type.clone(),
         }
     }
 }
 
-impl PhysicalExpr for ScalarFunctionExpr {
-    fn name(&self) -> String {
-        self.name.clone()
+impl fmt::Display for ScalarFunctionExpr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}({})",
+            self.name,
+            self.args
+                .iter()
+                .map(|e| format!("{}", e))
+                .collect::<Vec<String>>()
+                .join(", ")
+        )
     }
+}
 
+impl PhysicalExpr for ScalarFunctionExpr {
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.return_type.clone())
     }

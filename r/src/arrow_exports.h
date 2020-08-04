@@ -32,31 +32,25 @@
 
 namespace arrow {
 
-struct Type {
-  enum type {
-    // forward declaration
-  };
-};
-
 namespace compute {
-class CastOptions;
+struct CastOptions;
 
 }  // namespace compute
 
 namespace csv {
 
 class TableReader;
-class ConvertOptions;
-class ReadOptions;
-class ParseOptions;
+struct ConvertOptions;
+struct ReadOptions;
+struct ParseOptions;
 
 }  // namespace csv
 
 namespace json {
 
 class TableReader;
-class ReadOptions;
-class ParseOptions;
+struct ReadOptions;
+struct ParseOptions;
 
 }  // namespace json
 
@@ -91,6 +85,7 @@ class FileWriter;
 
 RCPP_EXPOSED_ENUM_NODECL(arrow::Type::type)
 RCPP_EXPOSED_ENUM_NODECL(arrow::DateUnit)
+RCPP_EXPOSED_ENUM_NODECL(arrow::ipc::MetadataVersion)
 RCPP_EXPOSED_ENUM_NODECL(arrow::TimeUnit::type)
 RCPP_EXPOSED_ENUM_NODECL(arrow::StatusCode)
 RCPP_EXPOSED_ENUM_NODECL(arrow::io::FileMode::type)
