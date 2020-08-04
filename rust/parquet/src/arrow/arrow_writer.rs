@@ -29,7 +29,7 @@ use crate::errors::Result;
 use crate::file::properties::WriterProperties;
 use crate::{
     data_type::*,
-    file::writer::{FileWriter, RowGroupWriter, SerializedFileWriter, ParquetWriter},
+    file::writer::{FileWriter, ParquetWriter, RowGroupWriter, SerializedFileWriter},
 };
 
 pub struct ArrowWriter<W: ParquetWriter> {
@@ -38,7 +38,11 @@ pub struct ArrowWriter<W: ParquetWriter> {
 }
 
 impl<W: 'static + ParquetWriter> ArrowWriter<W> {
-    pub fn try_new(writer: W, arrow_schema: &Schema, props: Option<Rc<WriterProperties>>) -> Result<Self> {
+    pub fn try_new(
+        writer: W,
+        arrow_schema: &Schema,
+        props: Option<Rc<WriterProperties>>,
+    ) -> Result<Self> {
         let schema = crate::arrow::arrow_to_parquet_schema(arrow_schema)?;
         let props = match props {
             Some(props) => props,
@@ -92,7 +96,9 @@ fn unnest_arrays_to_leaves(
     for (field, column) in fields.iter().zip(columns) {
         match field.data_type() {
             ArrowDataType::List(_dtype) => unimplemented!("list not yet implemented"),
-            ArrowDataType::LargeList(_dtype) => unimplemented!("largelist not yet implemented"),
+            ArrowDataType::LargeList(_dtype) => {
+                unimplemented!("largelist not yet implemented")
+            }
             ArrowDataType::FixedSizeList(_, _) => {
                 unimplemented!("fsl not yet implemented")
             }
