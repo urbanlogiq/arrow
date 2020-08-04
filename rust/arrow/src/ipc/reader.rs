@@ -862,12 +862,12 @@ mod tests {
 
     use flate2::read::GzDecoder;
 
+    use crate::ipc::writer::StreamWriter;
     use crate::util::integration_util::*;
+    use std::cell::RefCell;
     use std::env;
     use std::fs::File;
     use std::rc::Rc;
-    use std::cell::RefCell;
-    use crate::ipc::writer::StreamWriter;
 
     #[test]
     fn read_generated_files() {

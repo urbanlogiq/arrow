@@ -28,8 +28,8 @@ use crate::logicalplan::{
 use arrow::datatypes::*;
 
 use sqlparser::ast::{
-    BinaryOperator, DataType as SQLDataType, Expr as SQLExpr, Query, Select, SelectItem,
-    SetExpr, TableFactor, TableWithJoins, UnaryOperator, Value, FunctionArg,
+    BinaryOperator, DataType as SQLDataType, Expr as SQLExpr, FunctionArg, Query, Select,
+    SelectItem, SetExpr, TableFactor, TableWithJoins, UnaryOperator, Value,
 };
 use sqlparser::ast::{OrderByExpr, Statement};
 
@@ -367,7 +367,7 @@ impl<S: SchemaProvider> SqlToRel<S> {
                             .iter()
                             .map(|a| {
                                 let expr = match a {
-                                    FunctionArg::Named { name: _, arg} => arg,
+                                    FunctionArg::Named { name: _, arg } => arg,
                                     FunctionArg::Unnamed(arg) => arg,
                                 };
                                 self.sql_to_rex(expr, schema)
@@ -390,7 +390,7 @@ impl<S: SchemaProvider> SqlToRel<S> {
                             .iter()
                             .map(|a| {
                                 let expr = match a {
-                                    FunctionArg::Named { name: _, arg} => arg,
+                                    FunctionArg::Named { name: _, arg } => arg,
                                     FunctionArg::Unnamed(arg) => arg,
                                 };
 
@@ -415,7 +415,7 @@ impl<S: SchemaProvider> SqlToRel<S> {
                                 .iter()
                                 .map(|a| {
                                     let expr = match a {
-                                        FunctionArg::Named { name: _, arg} => arg,
+                                        FunctionArg::Named { name: _, arg } => arg,
                                         FunctionArg::Unnamed(arg) => arg,
                                     };
                                     self.sql_to_rex(expr, schema)
