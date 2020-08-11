@@ -75,8 +75,13 @@ struct NullBitSetter<'a> {
     null_count: usize,
 }
 
-fn filter_primitive_item_list_array<T>(filter_context: &FilterContext, data_array: &Array) -> Result<Arc<dyn Array>>
-where T: ArrowNumericType {
+fn filter_primitive_item_list_array<T>(
+    filter_context: &FilterContext,
+    data_array: &Array,
+) -> Result<Arc<dyn Array>>
+where
+    T: ArrowNumericType,
+{
     let list_of_lists = data_array.as_any().downcast_ref::<ListArray>().unwrap();
     let values_builder = PrimitiveBuilder::<T>::new(list_of_lists.len());
     let mut builder = ListBuilder::new(values_builder);
