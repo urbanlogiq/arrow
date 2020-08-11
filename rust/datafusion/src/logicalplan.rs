@@ -324,6 +324,7 @@ pub enum Expr {
         /// Right-hand side of the expression
         right: Box<Expr>,
     },
+    /// Nested expression e.g. `(foo > bar)` or `(1)`
     Nested(Box<Expr>),
     /// unary NOT
     Not(Box<Expr>),
