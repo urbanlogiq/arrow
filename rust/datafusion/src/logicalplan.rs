@@ -324,6 +324,8 @@ pub enum Expr {
         /// Right-hand side of the expression
         right: Box<Expr>,
     },
+    /// Nested expression e.g. `(foo > bar)` or `(1)`
+    Nested(Box<Expr>),
     /// unary NOT
     Not(Box<Expr>),
     /// unary IS NOT NULL
@@ -403,6 +405,7 @@ impl Expr {
             Expr::Wildcard => Err(ExecutionError::General(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
+            Expr::Nested(e) => e.get_type(schema),
         }
     }
 
@@ -650,6 +653,7 @@ impl fmt::Debug for Expr {
                 write!(f, ")")
             }
             Expr::Wildcard => write!(f, "*"),
+            Expr::Nested(expr) => write!(f, "({:?})", expr),
         }
     }
 }
