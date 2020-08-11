@@ -75,50 +75,49 @@ struct NullBitSetter<'a> {
     null_count: usize,
 }
 
-macro_rules! filter_primitive_item_list_array {
-    ($self: expr, $array:expr, $filter:expr, $item_type:ident) => {{
-        let list_of_lists = $array.as_any().downcast_ref::<ListArray>().unwrap();
-        let values_builder = PrimitiveBuilder::<$item_type>::new(list_of_lists.len());
-        let mut builder = ListBuilder::new(values_builder);
+fn filter_primitive_item_list_array<T>(filter_context: &FilterContext, data_array: &Array) -> Result<Arc<dyn Array>>
+where T: ArrowNumericType {
+    let list_of_lists = data_array.as_any().downcast_ref::<ListArray>().unwrap();
+    let values_builder = PrimitiveBuilder::<T>::new(list_of_lists.len());
+    let mut builder = ListBuilder::new(values_builder);
 
-        for i in 0..$self.filter_u64.len() {
-            let filter_batch = $self.filter_u64[i];
-            if filter_batch == 0 {
-                continue;
-            }
+    for i in 0..filter_context.filter_u64.len() {
+        let filter_batch = filter_context.filter_u64[i];
+        if filter_batch == 0 {
+            continue;
+        }
 
-            for j in 0..64 {
-                if (filter_batch & $self.filter_mask[j]) != 0 {
-                    let data_index = (i * 64) + j;
-                    if list_of_lists.is_null(data_index) {
-                        builder.append(false)?;
-                    } else {
-                        let inner_list = list_of_lists.value(data_index);
-                        let inner_list = inner_list
-                            .as_any()
-                            .downcast_ref::<PrimitiveArray<$item_type>>()
-                            .unwrap();
-                        for k in 0..inner_list.len() {
-                            if inner_list.is_null(k) {
-                                builder.values().append_null()?;
-                            } else {
-                                builder.values().append_value(inner_list.value(k))?;
-                            }
+        for j in 0..64 {
+            if (filter_batch & filter_context.filter_mask[j]) != 0 {
+                let data_index = (i * 64) + j;
+                if list_of_lists.is_null(data_index) {
+                    builder.append(false)?;
+                } else {
+                    let inner_list = list_of_lists.value(data_index);
+                    let inner_list = inner_list
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<T>>()
+                        .unwrap();
+                    for k in 0..inner_list.len() {
+                        if inner_list.is_null(k) {
+                            builder.values().append_null()?;
+                        } else {
+                            builder.values().append_value(inner_list.value(k))?;
                         }
-                        builder.append(true)?;
                     }
+                    builder.append(true)?;
                 }
             }
         }
+    }
 
-        Ok(Arc::new(builder.finish()))
-    }};
+    Ok(Arc::new(builder.finish()))
 }
 
 macro_rules! filter_non_primitive_item_list_array {
-    ($self: expr, $array:expr, $filter:expr, $item_array_type:ident, $item_builder:ident) => {{
+    ($self: expr, $array:expr, $item_array_type:ident, $item_builder:ty) => {{
         let list_of_lists = $array.as_any().downcast_ref::<ListArray>().unwrap();
-        let values_builder = $item_builder::new(list_of_lists.len());
+        let values_builder = <$item_builder>::new(list_of_lists.len());
         let mut builder = ListBuilder::new(values_builder);
 
         for i in 0..$self.filter_u64.len() {
@@ -450,90 +449,40 @@ impl FilterContext {
                 Ok(Arc::new(StringArray::from(values)))
             }
             DataType::List(dt) => match &**dt {
-                DataType::UInt8 => {
-                    filter_primitive_item_list_array!(self, array, filter, UInt8Type)
-                }
-                DataType::UInt16 => {
-                    filter_primitive_item_list_array!(self, array, filter, UInt16Type)
-                }
-                DataType::UInt32 => {
-                    filter_primitive_item_list_array!(self, array, filter, UInt32Type)
-                }
-                DataType::UInt64 => {
-                    filter_primitive_item_list_array!(self, array, filter, UInt64Type)
-                }
-                DataType::Int8 => filter_primitive_item_list_array!(self, array, filter, Int8Type),
-                DataType::Int16 => {
-                    filter_primitive_item_list_array!(self, array, filter, Int16Type)
-                }
-                DataType::Int32 => {
-                    filter_primitive_item_list_array!(self, array, filter, Int32Type)
-                }
-                DataType::Int64 => {
-                    filter_primitive_item_list_array!(self, array, filter, Int64Type)
-                }
-                DataType::Float32 => {
-                    filter_primitive_item_list_array!(self, array, filter, Float32Type)
-                }
-                DataType::Float64 => {
-                    filter_primitive_item_list_array!(self, array, filter, Float64Type)
-                }
-                DataType::Boolean => {
-                    filter_primitive_item_list_array!(self, array, filter, BooleanType)
-                }
-                DataType::Date32(_) => {
-                    filter_primitive_item_list_array!(self, array, filter, Date32Type)
-                }
-                DataType::Date64(_) => {
-                    filter_primitive_item_list_array!(self, array, filter, Date64Type)
-                }
-                DataType::Time32(TimeUnit::Second) => {
-                    filter_primitive_item_list_array!(self, array, filter, Time32SecondType)
-                }
-                DataType::Time32(TimeUnit::Millisecond) => {
-                    filter_primitive_item_list_array!(self, array, filter, Time32MillisecondType)
-                }
-                DataType::Time64(TimeUnit::Microsecond) => {
-                    filter_primitive_item_list_array!(self, array, filter, Time64MicrosecondType)
-                }
-                DataType::Time64(TimeUnit::Nanosecond) => {
-                    filter_primitive_item_list_array!(self, array, filter, Time64NanosecondType)
-                }
-                DataType::Duration(TimeUnit::Second) => {
-                    filter_primitive_item_list_array!(self, array, filter, DurationSecondType)
-                }
-                DataType::Duration(TimeUnit::Millisecond) => {
-                    filter_primitive_item_list_array!(self, array, filter, DurationMillisecondType)
-                }
-                DataType::Duration(TimeUnit::Microsecond) => {
-                    filter_primitive_item_list_array!(self, array, filter, DurationMicrosecondType)
-                }
-                DataType::Duration(TimeUnit::Nanosecond) => {
-                    filter_primitive_item_list_array!(self, array, filter, DurationNanosecondType)
-                }
-                DataType::Timestamp(TimeUnit::Second, _) => {
-                    filter_primitive_item_list_array!(self, array, filter, TimestampSecondType)
-                }
-                DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                    filter_primitive_item_list_array!(self, array, filter, TimestampMillisecondType)
-                }
-                DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                    filter_primitive_item_list_array!(self, array, filter, TimestampMicrosecondType)
-                }
-                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                    filter_primitive_item_list_array!(self, array, filter, TimestampNanosecondType)
-                }
+                DataType::UInt8 => filter_primitive_item_list_array::<UInt8Type>(self, array),
+                DataType::UInt16 => filter_primitive_item_list_array::<UInt16Type>(self, array),
+                DataType::UInt32 => filter_primitive_item_list_array::<UInt32Type>(self, array),
+                DataType::UInt64 => filter_primitive_item_list_array::<UInt64Type>(self, array),
+                DataType::Int8 => filter_primitive_item_list_array::<Int8Type>(self, array),
+                DataType::Int16 => filter_primitive_item_list_array::<Int16Type>(self, array),
+                DataType::Int32 => filter_primitive_item_list_array::<Int32Type>(self, array),
+                DataType::Int64 => filter_primitive_item_list_array::<Int64Type>(self, array),
+                DataType::Float32 => filter_primitive_item_list_array::<Float32Type>(self, array),
+                DataType::Float64 => filter_primitive_item_list_array::<Float64Type>(self, array),
+                DataType::Boolean => filter_non_primitive_item_list_array!(self, array, BooleanArray, PrimitiveBuilder<BooleanType>),
+                DataType::Date32(_) => filter_primitive_item_list_array::<Date32Type>(self, array),
+                DataType::Date64(_) => filter_primitive_item_list_array::<Date64Type>(self, array),
+                DataType::Time32(TimeUnit::Second) => filter_primitive_item_list_array::<Time32SecondType>(self, array),
+                DataType::Time32(TimeUnit::Millisecond) => filter_primitive_item_list_array::<Time32MillisecondType>(self, array),
+                DataType::Time64(TimeUnit::Microsecond) => filter_primitive_item_list_array::<Time64MicrosecondType>(self, array),
+                DataType::Time64(TimeUnit::Nanosecond) => filter_primitive_item_list_array::<Time64NanosecondType>(self, array),
+                DataType::Duration(TimeUnit::Second) => filter_primitive_item_list_array::<DurationSecondType>(self, array),
+                DataType::Duration(TimeUnit::Millisecond) => filter_primitive_item_list_array::<DurationMillisecondType>(self, array),
+                DataType::Duration(TimeUnit::Microsecond) => filter_primitive_item_list_array::<DurationMicrosecondType>(self, array),
+                DataType::Duration(TimeUnit::Nanosecond) => filter_primitive_item_list_array::<DurationNanosecondType>(self, array),
+                DataType::Timestamp(TimeUnit::Second, _) => filter_primitive_item_list_array::<TimestampSecondType>(self, array),
+                DataType::Timestamp(TimeUnit::Millisecond, _) => filter_primitive_item_list_array::<TimestampMillisecondType>(self, array),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => filter_primitive_item_list_array::<TimestampMicrosecondType>(self, array),
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => filter_primitive_item_list_array::<TimestampNanosecondType>(self, array),
                 DataType::Binary => filter_non_primitive_item_list_array!(
                     self,
                     array,
-                    filter,
                     BinaryArray,
                     BinaryBuilder
                 ),
                 DataType::Utf8 => filter_non_primitive_item_list_array!(
                     self,
                     array,
-                    filter,
                     StringArray,
                     StringBuilder
                 ),
