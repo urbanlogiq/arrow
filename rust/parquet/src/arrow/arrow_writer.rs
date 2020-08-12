@@ -30,6 +30,7 @@ use crate::file::properties::WriterProperties;
 use crate::{
     data_type::*,
     file::writer::{FileWriter, ParquetWriter, RowGroupWriter, SerializedFileWriter},
+    memory::BufferPtr,
 };
 
 /// Arrow writer
@@ -144,12 +145,17 @@ fn write_leaves(
         | ArrowDataType::Time32(_)
         | ArrowDataType::Time64(_)
         | ArrowDataType::Duration(_)
-        | ArrowDataType::Interval(_) => {
+        | ArrowDataType::Interval(_)
+        | ArrowDataType::LargeBinary
+        | ArrowDataType::Binary
+        | ArrowDataType::Utf8
+        | ArrowDataType::LargeUtf8 => {
             let mut col_writer = get_col_writer(&mut row_group_writer)?;
             write_leaf(
                 &mut col_writer,
                 array,
                 levels.pop().expect("Levels exhausted"),
+                array.data_type(),
             )?;
             row_group_writer.close_column(col_writer)?;
             Ok(())
@@ -175,10 +181,6 @@ fn write_leaves(
         | ArrowDataType::Null
         | ArrowDataType::Boolean
         | ArrowDataType::FixedSizeBinary(_)
-        | ArrowDataType::LargeBinary
-        | ArrowDataType::Binary
-        | ArrowDataType::Utf8
-        | ArrowDataType::LargeUtf8
         | ArrowDataType::Union(_)
         | ArrowDataType::Dictionary(_, _) => Err(ParquetError::NYI(
             "Attempting to write an Arrow type that is not yet implemented".to_string(),
@@ -186,10 +188,22 @@ fn write_leaves(
     }
 }
 
+macro_rules! write_binary_batch {
+    ($collector:ident, $ty:ty, $column: ident, $typed:ident, $levels:ident) => {{
+        let array = <$ty>::from($column.data());
+        $typed.write_batch(
+            $collector(&array).as_slice(),
+            Some($levels.definition.as_slice()),
+            $levels.repetition.as_deref(),
+        )?
+    }};
+}
+
 fn write_leaf(
     writer: &mut ColumnWriter,
     column: &arrow_array::ArrayRef,
     levels: Levels,
+    data_type: &ArrowDataType,
 ) -> Result<i64> {
     let written = match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
@@ -234,9 +248,37 @@ fn write_leaf(
                 levels.repetition.as_deref(),
             )?
         }
-        ColumnWriter::ByteArrayColumnWriter(ref mut _typed) => {
-            unreachable!("Currently unreachable because data type not supported")
-        }
+        ColumnWriter::ByteArrayColumnWriter(ref mut typed) => match data_type {
+            ArrowDataType::Binary => write_binary_batch!(
+                get_binary_array,
+                arrow_array::BinaryArray,
+                column,
+                typed,
+                levels
+            ),
+            ArrowDataType::LargeBinary => write_binary_batch!(
+                get_large_binary_array,
+                arrow_array::LargeBinaryArray,
+                column,
+                typed,
+                levels
+            ),
+            ArrowDataType::Utf8 => write_binary_batch!(
+                get_string_array,
+                arrow_array::StringArray,
+                column,
+                typed,
+                levels
+            ),
+            ArrowDataType::LargeUtf8 => write_binary_batch!(
+                get_large_string_array,
+                arrow_array::LargeStringArray,
+                column,
+                typed,
+                levels
+            ),
+            _ => unreachable!("Currently unreachable because data type not supported"),
+        },
         ColumnWriter::FixedLenByteArrayColumnWriter(ref mut _typed) => {
             unreachable!("Currently unreachable because data type not supported")
         }
@@ -429,6 +471,28 @@ fn get_primitive_def_levels(
     });
     primitive_def_levels
 }
+
+macro_rules! def_get_binary_array_fn {
+    ($name:ident, $ty:ty) => {
+        fn $name(array: &$ty) -> Vec<ByteArray> {
+            let mut values = Vec::with_capacity(array.len() - array.null_count());
+            for i in 0..array.len() {
+                if array.is_valid(i) {
+                    let buffer = BufferPtr::new(array.value(i).as_bytes().into());
+                    let mut bytes = ByteArray::new();
+                    bytes.set_data(buffer);
+                    values.push(bytes);
+                }
+            }
+            values
+        }
+    };
+}
+
+def_get_binary_array_fn!(get_string_array, arrow_array::StringArray);
+def_get_binary_array_fn!(get_large_string_array, arrow_array::LargeStringArray);
+def_get_binary_array_fn!(get_binary_array, arrow_array::BinaryArray);
+def_get_binary_array_fn!(get_large_binary_array, arrow_array::LargeBinaryArray);
 
 /// Get the underlying numeric array slice, skipping any null values.
 /// If there are no null values, it might be quicker to get the slice directly instead of
