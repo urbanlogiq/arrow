@@ -323,13 +323,13 @@ fn get_levels(
         | ArrowDataType::Time32(_)
         | ArrowDataType::Time64(_)
         | ArrowDataType::Duration(_)
-        | ArrowDataType::Interval(_) => vec![Levels {
+        | ArrowDataType::Interval(_)
+        | ArrowDataType::Binary
+        | ArrowDataType::LargeBinary => vec![Levels {
             definition: get_primitive_def_levels(array, parent_def_levels),
             repetition: None,
         }],
-        ArrowDataType::Binary => unimplemented!(),
         ArrowDataType::FixedSizeBinary(_) => unimplemented!(),
-        ArrowDataType::LargeBinary => unimplemented!(),
         ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
             let array_data = array.data();
             let child_data = array_data.child_data().get(0).unwrap();
@@ -516,13 +516,16 @@ where
 mod tests {
     use super::*;
 
+    use std::io::Seek;
     use std::sync::Arc;
 
     use arrow::array::*;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
+    use arrow::record_batch::{RecordBatch, RecordBatchReader};
 
+    use crate::arrow::{ArrowReader, ParquetFileArrowReader};
+    use crate::file::reader::SerializedFileReader;
     use crate::util::test_common::get_temp_file;
 
     #[test]
@@ -583,6 +586,62 @@ mod tests {
         let mut writer = ArrowWriter::try_new(file, Arc::new(schema), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn arrow_writer_binary() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let binary_field = Field::new("b", DataType::Binary, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
+        let raw_string_values = vec!["foo", "bar", "baz", "quux"];
+        let raw_binary_values = vec![
+            b"foo".to_vec(),
+            b"bar".to_vec(),
+            b"baz".to_vec(),
+            b"quux".to_vec(),
+        ];
+        let raw_binary_value_refs = raw_binary_values
+            .iter()
+            .map(|x| x.as_slice())
+            .collect::<Vec<_>>();
+
+        let string_values = StringArray::from(raw_string_values.clone());
+        let binary_values = BinaryArray::from(raw_binary_value_refs);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(string_values), Arc::new(binary_values)],
+        )
+        .unwrap();
+
+        let mut file = get_temp_file("test_arrow_writer.parquet", &[]);
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), Arc::new(schema), None)
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let file_reader = SerializedFileReader::new(file).unwrap();
+        let mut arrow_reader = ParquetFileArrowReader::new(Rc::new(file_reader));
+        let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
+
+        let batch = record_batch_reader.next_batch().unwrap().unwrap();
+        let string_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let binary_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+
+        for i in 0..batch.num_rows() {
+            assert_eq!(string_col.value(i), raw_string_values[i]);
+            assert_eq!(binary_col.value(i), raw_binary_values[i].as_slice());
+        }
     }
 
     #[test]
