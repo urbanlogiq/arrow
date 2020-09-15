@@ -555,7 +555,7 @@ where
 }
 
 // create a buffer and fill it with valid bits
-fn new_all_set_buffer(len: usize) -> Buffer {
+pub(super) fn new_all_set_buffer(len: usize) -> Buffer {
     let buffer = MutableBuffer::new(len);
     let buffer = buffer.with_bitset(len, true);
     let buffer = buffer.freeze();

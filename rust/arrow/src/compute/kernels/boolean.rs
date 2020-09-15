@@ -24,10 +24,12 @@
 
 use std::sync::Arc;
 
-use crate::array::{Array, ArrayData, BooleanArray};
+use crate::array::{Array, ArrayData, BooleanArray, PrimitiveArray};
+use crate::bitmap::Bitmap;
 use crate::buffer::Buffer;
+use crate::compute::kernels::comparison::new_all_set_buffer;
 use crate::compute::util::apply_bin_op_to_option_bitmap;
-use crate::datatypes::DataType;
+use crate::datatypes::{ArrowNumericType, DataType};
 use crate::error::{ArrowError, Result};
 
 /// Helper function to implement binary kernels
@@ -97,9 +99,60 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray> {
     Ok(BooleanArray::from(Arc::new(data)))
 }
 
+/// Copies original array, setting null bit to true if a secondary comparison boolean array is set to true.
+/// Typically used to implement NULLIF.
+pub fn nullif<T>(left: &PrimitiveArray<T>, right: &BooleanArray) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
+    let left_data = left.data();
+
+    // set = not null.  Set initial bitmap to null if either one is null.
+    // If there is no bitmap, create a new one with all values valid for nullity op later
+    let combined_null_buffer = match apply_bin_op_to_option_bitmap(
+        left_data.null_bitmap(),
+        right.data().null_bitmap(),
+        |a, b| a & b,
+    ) {
+        Ok(mod_null_buf) => match mod_null_buf {
+            Some(buff) => buff,
+            _ => new_all_set_buffer(left.len()),
+        },
+        _ => new_all_set_buffer(left.len()),
+    };
+
+    // For every nonnull, if comparison array is true at position, clear bitmap to null
+    // TRICK: convert BooleanArray buffer as a bitmap for faster operation
+    let comparison_bitmap = Bitmap::from(right.values());
+    let combo_null_bitmap = Bitmap::from(combined_null_buffer);
+    let modified_null_buffer = apply_bin_op_to_option_bitmap(
+                                   &Some(combo_null_bitmap),
+                                   &Some(comparison_bitmap),
+                                   |a, b| a & &!b)?;
+
+    // Construct new array with same values but modified null bitmap
+    let data = ArrayData::new(
+        T::get_data_type(),
+        left.len(),
+        Some(left.len()),
+        modified_null_buffer,
+        left.offset(),
+        left_data.buffers().to_vec(),
+        left_data.child_data().to_vec(),
+    );
+    Ok(PrimitiveArray::<T>::from(Arc::new(data)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::array::Int32Array;
 
     #[test]
     fn test_bool_array_and() {
@@ -153,5 +206,18 @@ mod tests {
         assert_eq!(true, c.is_null(1));
         assert_eq!(true, c.is_null(2));
         assert_eq!(false, c.is_null(3));
+    }
+
+    #[test]
+    fn test_nullif_int_array() {
+        let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9)]);
+        let comp = BooleanArray::from(vec![Some(false), None, Some(true), Some(false), Some(false)]);
+        let res = nullif(&a, &comp).unwrap();
+
+        assert_eq!(15, res.value(0));
+        assert_eq!(true, res.is_null(1));
+        assert_eq!(true, res.is_null(2));  // comp true, slot 2 turned into null
+        assert_eq!(1, res.value(3));
+        assert_eq!(9, res.value(4));
     }
 }
