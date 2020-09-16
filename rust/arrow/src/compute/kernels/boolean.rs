@@ -122,15 +122,15 @@ where
     ) {
         Ok(mod_null_buf) => match mod_null_buf {
             Some(buff) => buff,
-            _ => new_all_set_buffer(left.len()),
+            _ => new_all_set_buffer((left.len() + 7) / 8),  // number of bytes not bits
         },
-        _ => new_all_set_buffer(left.len()),
+        _ => new_all_set_buffer((left.len() + 7) / 8),
     };
 
     // For every nonnull, if comparison array is true at position, clear bitmap to null
     // TRICK: convert BooleanArray buffer as a bitmap for faster operation
-    let comparison_bitmap = Bitmap::from(right.values());
     let combo_null_bitmap = Bitmap::from(combined_null_buffer);
+    let comparison_bitmap = Bitmap::from(right.values());
     let modified_null_buffer = apply_bin_op_to_option_bitmap(
                                    &Some(combo_null_bitmap),
                                    &Some(comparison_bitmap),

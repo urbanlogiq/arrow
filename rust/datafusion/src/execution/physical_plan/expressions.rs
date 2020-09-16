@@ -2009,7 +2009,8 @@ mod tests {
     #[test]
     fn nullif_int32() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let a = Int32Array::from(vec![Some(1), Some(2), None, None, Some(3), None]);
+        let a = Int32Array::from(vec![Some(1), Some(2), None, None, Some(3), None, None, Some(4), Some(5)]);
+        let a_len = a.len();
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
         let literal_expr = lit(ScalarValue::Int32(2));
@@ -2017,7 +2018,7 @@ mod tests {
 
         // Results should be: Some(1), None, None, None, Some(3), None
         let result = lt.evaluate(&batch)?;
-        assert_eq!(result.len(), 6);
+        assert_eq!(result.len(), a_len);
 
         let result = result
             .as_any()
@@ -2030,6 +2031,28 @@ mod tests {
         assert_eq!(true, result.is_null(3));
         assert_eq!(3, result.value(4));
         assert_eq!(true, result.is_null(5));
+        assert_eq!(true, result.is_null(6));
+        assert_eq!(5, result.value(8));
+        Ok(())
+    }
+
+    #[test]
+    // Ensure that arrays with no nulls can also invoke NULLIF() correctly
+    fn nullif_int32_nonulls() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
+        let a_len = a.len();
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        let literal_expr = lit(ScalarValue::Int32(1));
+        let lt = binary(col("a"), Operator::NullIf, literal_expr);
+
+        let result = lt.evaluate(&batch)?;
+        assert_eq!(result.len(), a_len);
+
+        let expected = Int32Array::from(vec![None, Some(3), Some(10), Some(7),
+                                             Some(8), None, Some(2), Some(4), Some(5)]);
+        assert_array_eq::<Int32Type>(expected, result);
         Ok(())
     }
 
@@ -2197,7 +2220,11 @@ mod tests {
             .expect("Actual array should unwrap to type of expected array");
 
         for i in 0..expected.len() {
-            assert_eq!(expected.value(i), actual.value(i));
+            if expected.is_null(i) {
+                assert!(actual.is_null(i));
+            } else {
+                assert_eq!(expected.value(i), actual.value(i));
+            }
         }
     }
 
