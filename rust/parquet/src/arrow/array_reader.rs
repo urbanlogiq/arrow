@@ -2063,7 +2063,7 @@ mod tests {
         let sublist_0 = array.value(0);
         let sublist_0 = sublist_0
             .as_any()
-            .downcast_ref::<PrimitiveArray<ArrowInt64>>()
+            .downcast_ref::<PrimitiveArray<ArrowInt64Type>>()
             .unwrap();
 
         assert_eq!(2, sublist_0.len());
