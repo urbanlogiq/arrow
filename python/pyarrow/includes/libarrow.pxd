@@ -1397,12 +1397,12 @@ cdef extern from "arrow/ipc/api.h" namespace "arrow::ipc" nogil:
             unique_ptr[CMessageReader] message_reader,
             const CIpcReadOptions& options)
 
-    CResult[shared_ptr[CRecordBatchWriter]] NewStreamWriter(
-        COutputStream* sink, const shared_ptr[CSchema]& schema,
+    CResult[shared_ptr[CRecordBatchWriter]] MakeStreamWriter(
+        shared_ptr[COutputStream] sink, const shared_ptr[CSchema]& schema,
         CIpcWriteOptions& options)
 
-    CResult[shared_ptr[CRecordBatchWriter]] NewFileWriter(
-        COutputStream* sink, const shared_ptr[CSchema]& schema,
+    CResult[shared_ptr[CRecordBatchWriter]] MakeFileWriter(
+        shared_ptr[COutputStream] sink, const shared_ptr[CSchema]& schema,
         CIpcWriteOptions& options)
 
     cdef cppclass CRecordBatchFileReader \
@@ -1441,8 +1441,7 @@ cdef extern from "arrow/ipc/api.h" namespace "arrow::ipc" nogil:
         const CIpcReadOptions& options)
 
     CResult[shared_ptr[CBuffer]] SerializeSchema(
-        const CSchema& schema, CDictionaryMemo* dictionary_memo,
-        CMemoryPool* pool)
+        const CSchema& schema, CMemoryPool* pool)
 
     CResult[shared_ptr[CBuffer]] SerializeRecordBatch(
         const CRecordBatch& schema, const CIpcWriteOptions& options)
@@ -1708,6 +1707,17 @@ cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
             " arrow::compute::TakeOptions"(CFunctionOptions):
         c_bool boundscheck
 
+    enum CMinMaxMode \
+            "arrow::compute::MinMaxOptions::Mode":
+        CMinMaxMode_SKIP \
+            "arrow::compute::MinMaxOptions::SKIP"
+        CMinMaxMode_EMIT_NULL \
+            "arrow::compute::MinMaxOptions::EMIT_NULL"
+
+    cdef cppclass CMinMaxOptions \
+            "arrow::compute::MinMaxOptions"(CFunctionOptions):
+        CMinMaxMode null_handling
+
     enum DatumType" arrow::Datum::type":
         DatumType_NONE" arrow::Datum::NONE"
         DatumType_SCALAR" arrow::Datum::SCALAR"
@@ -1753,6 +1763,7 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py" nogil:
         int64_t size
         CMemoryPool* pool
         c_bool from_pandas
+        c_bool ignore_timezone
 
     # TODO Some functions below are not actually "nogil"
 
@@ -1875,6 +1886,7 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py" nogil:
         c_bool timestamp_as_object
         c_bool use_threads
         c_bool coerce_temporal_nanoseconds
+        c_bool ignore_timezone
         c_bool deduplicate_objects
         c_bool safe_cast
         c_bool split_blocks
@@ -1926,6 +1938,9 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py::internal" nogil:
     int64_t TimePoint_to_ns(CTimePoint val)
     CTimePoint TimePoint_from_s(double val)
     CTimePoint TimePoint_from_ns(int64_t val)
+
+    CResult[c_string] TzinfoToString(PyObject* pytzinfo)
+    CResult[PyObject*] StringToTzinfo(c_string)
 
 
 cdef extern from 'arrow/python/init.h':
@@ -2028,6 +2043,7 @@ cdef extern from 'arrow/util/iterator.h' namespace 'arrow' nogil:
             bint operator!=(RangeIterator) const
         RangeIterator begin()
         RangeIterator end()
+    CIterator[T] MakeVectorIterator[T](vector[T] v)
 
 cdef extern from 'arrow/util/thread_pool.h' namespace 'arrow' nogil:
     int GetCpuThreadPoolCapacity()

@@ -298,10 +298,7 @@ build_libarrow <- function(src_dir, dst_dir) {
     # CXXFLAGS = R_CMD_config("CXX11FLAGS"), # We don't want the same debug symbols
     LDFLAGS = R_CMD_config("LDFLAGS")
   )
-  env_vars <- paste(
-    names(env_var_list), dQuote(env_var_list, FALSE),
-    sep = "=", collapse = " "
-  )
+  env_vars <- paste0(names(env_var_list), '="', env_var_list, '"', collapse = " ")
   cat("**** arrow", ifelse(quietly, "", paste("with", env_vars)), "\n")
   status <- system(
     paste(env_vars, "inst/build_arrow_static.sh"),
@@ -315,11 +312,16 @@ build_libarrow <- function(src_dir, dst_dir) {
 }
 
 ensure_cmake <- function() {
-  cmake <- Sys.which("cmake")
-  if (!nzchar(cmake) || cmake_version() < 3.2) {
+  cmake <- find_cmake(c(
+    Sys.getenv("CMAKE"),
+    Sys.which("cmake"),
+    Sys.which("cmake3")
+  ))
+
+  if (is.null(cmake)) {
     # If not found, download it
     cat("**** cmake\n")
-    CMAKE_VERSION <- Sys.getenv("CMAKE_VERSION", "3.16.2")
+    CMAKE_VERSION <- Sys.getenv("CMAKE_VERSION", "3.18.1")
     cmake_binary_url <- paste0(
       "https://github.com/Kitware/CMake/releases/download/v", CMAKE_VERSION,
       "/cmake-", CMAKE_VERSION, "-Linux-x86_64.tar.gz"
@@ -335,18 +337,28 @@ ensure_cmake <- function() {
       "/cmake-", CMAKE_VERSION, "-Linux-x86_64",
       "/bin/cmake"
     )
-  } else {
-    # Sys.which() returns a named vector, but that plays badly with c() later
-    names(cmake) <- NULL
   }
   cmake
 }
 
-cmake_version <- function() {
+find_cmake <- function(paths, version_required = 3.2) {
+  # Given a list of possible cmake paths, return the first one that exists and is new enough
+  for (path in paths) {
+    if (nzchar(path) && cmake_version(path) >= version_required) {
+      # Sys.which() returns a named vector, but that plays badly with c() later
+      names(path) <- NULL
+      return(path)
+    }
+  }
+  # If none found, return NULL
+  NULL
+}
+
+cmake_version <- function(cmd = "cmake") {
   tryCatch(
     {
-      raw_version <- system("cmake --version", intern = TRUE, ignore.stderr = TRUE)
-      pat <- ".*?([0-9]+\\.[0-9]+\\.[0-9]+).*"
+      raw_version <- system(paste(cmd, "--version"), intern = TRUE, ignore.stderr = TRUE)
+      pat <- ".* ([0-9\\.]+).*?"
       which_line <- grep(pat, raw_version)
       package_version(sub(pat, "\\1", raw_version[which_line]))
     },

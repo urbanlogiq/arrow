@@ -121,6 +121,17 @@ pub fn take(
                 fields.clone().into_iter().zip(arrays).collect();
             Ok(Arc::new(StructArray::from(pairs)) as ArrayRef)
         }
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
+            DataType::Int8 => take_dict::<Int8Type>(values, indices),
+            DataType::Int16 => take_dict::<Int16Type>(values, indices),
+            DataType::Int32 => take_dict::<Int32Type>(values, indices),
+            DataType::Int64 => take_dict::<Int64Type>(values, indices),
+            DataType::UInt8 => take_dict::<UInt8Type>(values, indices),
+            DataType::UInt16 => take_dict::<UInt16Type>(values, indices),
+            DataType::UInt32 => take_dict::<UInt32Type>(values, indices),
+            DataType::UInt64 => take_dict::<UInt64Type>(values, indices),
+            t => unimplemented!("Take not supported for dictionary key type {:?}", t),
+        },
         t => unimplemented!("Take not supported for data type {:?}", t),
     }
 }
@@ -236,11 +247,40 @@ fn take_list(values: &ArrayRef, indices: &UInt32Array) -> Result<ArrayRef> {
     Ok(list_array)
 }
 
+/// `take` implementation for dictionary arrays
+///
+/// applies `take` to the keys of the dictionary array and returns a new dictionary array
+/// with the same dictionary values and reordered keys
+fn take_dict<T>(values: &ArrayRef, indices: &UInt32Array) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+{
+    let dict = values
+        .as_any()
+        .downcast_ref::<DictionaryArray<T>>()
+        .unwrap();
+    let keys: ArrayRef = Arc::new(dict.keys_array());
+    let new_keys = take_primitive::<T>(&keys, indices)?;
+    let new_keys_data = new_keys.data_ref();
+
+    let data = Arc::new(ArrayData::new(
+        dict.data_type().clone(),
+        new_keys.len(),
+        Some(new_keys_data.null_count()),
+        new_keys_data.null_buffer().cloned(),
+        0,
+        new_keys_data.buffers().to_vec(),
+        dict.data().child_data().to_vec(),
+    ));
+
+    Ok(Arc::new(DictionaryArray::<T>::from(data)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_take_primitive_arrays<'a, T>(
+    fn test_take_primitive_arrays<T>(
         data: Vec<Option<T::Native>>,
         index: &UInt32Array,
         options: Option<TakeOptions>,
@@ -442,7 +482,7 @@ mod tests {
         // construct offsets
         let expected_offsets = Buffer::from(&[0, 2, 2, 5, 7, 10].to_byte_slice());
         // construct list array from the two
-        let expected_list_data = ArrayData::builder(list_data_type.clone())
+        let expected_list_data = ArrayData::builder(list_data_type)
             .len(5)
             .null_count(1)
             // null buffer remains the same as only the indices have nulls
@@ -506,7 +546,7 @@ mod tests {
         // construct offsets
         let expected_offsets = Buffer::from(&[0, 1, 1, 4, 6, 9].to_byte_slice());
         // construct list array from the two
-        let expected_list_data = ArrayData::builder(list_data_type.clone())
+        let expected_list_data = ArrayData::builder(list_data_type)
             .len(5)
             .null_count(1)
             // null buffer remains the same as only the indices have nulls
@@ -572,7 +612,7 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 2);
         bit_util::set_bit(&mut null_bits, 3);
         bit_util::set_bit(&mut null_bits, 4);
-        let expected_list_data = ArrayData::builder(list_data_type.clone())
+        let expected_list_data = ArrayData::builder(list_data_type)
             .len(5)
             .null_count(2)
             // null buffer must be recalculated as both values and indices have nulls
@@ -656,5 +696,66 @@ mod tests {
             Some(take_opt),
             vec![None],
         );
+    }
+
+    #[test]
+    fn test_take_dict() {
+        let keys_builder = Int16Builder::new(8);
+        let values_builder = StringBuilder::new(4);
+
+        let mut dict_builder = StringDictionaryBuilder::new(keys_builder, values_builder);
+
+        dict_builder.append("foo").unwrap();
+        dict_builder.append("bar").unwrap();
+        dict_builder.append("").unwrap();
+        dict_builder.append_null().unwrap();
+        dict_builder.append("foo").unwrap();
+        dict_builder.append("bar").unwrap();
+        dict_builder.append("bar").unwrap();
+        dict_builder.append("foo").unwrap();
+
+        let array = dict_builder.finish();
+        let dict_values = array.values().clone();
+        let dict_values = dict_values.as_any().downcast_ref::<StringArray>().unwrap();
+        let array: Arc<dyn Array> = Arc::new(array);
+
+        let indices = UInt32Array::from(vec![
+            Some(0), // first "foo"
+            Some(7), // last "foo"
+            None,    // null index should return null
+            Some(5), // second "bar"
+            Some(6), // another "bar"
+            Some(2), // empty string
+            Some(3), // input is null at this index
+        ]);
+
+        let result = take(&array, &indices, None).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int16Type>>()
+            .unwrap();
+
+        let result_values: StringArray = result.values().data().into();
+
+        // dictionary values should stay the same
+        let expected_values = StringArray::from(vec!["foo", "bar", ""]);
+        assert_eq!(&expected_values, dict_values);
+        assert_eq!(&expected_values, &result_values);
+
+        let result_keys: Int16Array = result.keys().collect::<Vec<_>>().into();
+
+        let expected_keys = Int16Array::from(vec![
+            Some(0),
+            Some(0),
+            None,
+            Some(1),
+            Some(1),
+            Some(2),
+            None,
+        ]);
+
+        assert_eq!(expected_keys.len(), result_keys.len());
+        assert_eq!(expected_keys.data_type(), result_keys.data_type());
+        assert_eq!(expected_keys, result_keys);
     }
 }

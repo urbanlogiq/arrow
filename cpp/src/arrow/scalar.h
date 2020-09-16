@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "arrow/compare.h"
 #include "arrow/result.h"
 #include "arrow/status.h"
 #include "arrow/type.h"
@@ -61,7 +62,8 @@ struct ARROW_EXPORT Scalar : public util::EqualityComparable<Scalar> {
 
   using util::EqualityComparable<Scalar>::operator==;
   using util::EqualityComparable<Scalar>::Equals;
-  bool Equals(const Scalar& other) const;
+  bool Equals(const Scalar& other,
+              const EqualOptions& options = EqualOptions::Defaults()) const;
 
   struct ARROW_EXPORT Hash {
     size_t operator()(const Scalar& scalar) const { return hash(scalar); }
@@ -439,16 +441,6 @@ struct ARROW_EXPORT ExtensionScalar : public Scalar {
 
 /// @}
 
-/// \defgroup scalar-factories Scalar factory functions
-///
-/// @{
-
-/// \brief Scalar factory for null scalars
-ARROW_EXPORT
-std::shared_ptr<Scalar> MakeNullScalar(std::shared_ptr<DataType> type);
-
-/// @}
-
 namespace internal {
 
 inline Status CheckBufferLength(...) { return Status::OK(); }
@@ -488,9 +480,13 @@ struct MakeScalarImpl {
   std::shared_ptr<Scalar> out_;
 };
 
-/// \addtogroup scalar-factories
+/// \defgroup scalar-factories Scalar factory functions
 ///
 /// @{
+
+/// \brief Scalar factory for null scalars
+ARROW_EXPORT
+std::shared_ptr<Scalar> MakeNullScalar(std::shared_ptr<DataType> type);
 
 /// \brief Scalar factory for non-null scalars
 template <typename Value>

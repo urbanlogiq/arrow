@@ -41,6 +41,7 @@
 #include <aws/core/client/RetryStrategy.h>
 #include <aws/core/utils/logging/ConsoleLogSystem.h>
 #include <aws/core/utils/stream/PreallocatedStreamBuf.h>
+#include <aws/identity-management/auth/STSAssumeRoleCredentialsProvider.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/AbortMultipartUploadRequest.h>
 #include <aws/s3/model/CompleteMultipartUploadRequest.h>
@@ -170,9 +171,19 @@ void S3Options::ConfigureAnonymousCredentials() {
 }
 
 void S3Options::ConfigureAccessKey(const std::string& access_key,
-                                   const std::string& secret_key) {
+                                   const std::string& secret_key,
+                                   const std::string& session_token) {
   credentials_provider = std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(
-      ToAwsString(access_key), ToAwsString(secret_key));
+      ToAwsString(access_key), ToAwsString(secret_key), ToAwsString(session_token));
+}
+
+void S3Options::ConfigureAssumeRoleCredentials(
+    const std::string& role_arn, const std::string& session_name,
+    const std::string& external_id, int load_frequency,
+    const std::shared_ptr<Aws::STS::STSClient>& stsClient) {
+  credentials_provider = std::make_shared<Aws::Auth::STSAssumeRoleCredentialsProvider>(
+      ToAwsString(role_arn), ToAwsString(session_name), ToAwsString(external_id),
+      load_frequency, stsClient);
 }
 
 std::string S3Options::GetAccessKey() const {
@@ -183,6 +194,11 @@ std::string S3Options::GetAccessKey() const {
 std::string S3Options::GetSecretKey() const {
   auto credentials = credentials_provider->GetAWSCredentials();
   return std::string(FromAwsString(credentials.GetAWSSecretKey()));
+}
+
+std::string S3Options::GetSessionToken() const {
+  auto credentials = credentials_provider->GetAWSCredentials();
+  return std::string(FromAwsString(credentials.GetSessionToken()));
 }
 
 S3Options S3Options::Defaults() {
@@ -198,9 +214,24 @@ S3Options S3Options::Anonymous() {
 }
 
 S3Options S3Options::FromAccessKey(const std::string& access_key,
-                                   const std::string& secret_key) {
+                                   const std::string& secret_key,
+                                   const std::string& session_token) {
   S3Options options;
-  options.ConfigureAccessKey(access_key, secret_key);
+  options.ConfigureAccessKey(access_key, secret_key, session_token);
+  return options;
+}
+
+S3Options S3Options::FromAssumeRole(
+    const std::string& role_arn, const std::string& session_name,
+    const std::string& external_id, int load_frequency,
+    const std::shared_ptr<Aws::STS::STSClient>& stsClient) {
+  S3Options options;
+  options.role_arn = role_arn;
+  options.session_name = session_name;
+  options.external_id = external_id;
+  options.load_frequency = load_frequency;
+  options.ConfigureAssumeRoleCredentials(role_arn, session_name, external_id,
+                                         load_frequency, stsClient);
   return options;
 }
 
@@ -240,17 +271,16 @@ Result<S3Options> S3Options::FromUri(const Uri& uri, std::string* out_path) {
     options.ConfigureDefaultCredentials();
   }
 
-  auto it = options_map.find("region");
-  if (it != options_map.end()) {
-    options.region = it->second;
-  }
-  it = options_map.find("scheme");
-  if (it != options_map.end()) {
-    options.scheme = it->second;
-  }
-  it = options_map.find("endpoint_override");
-  if (it != options_map.end()) {
-    options.endpoint_override = it->second;
+  for (const auto& kv : options_map) {
+    if (kv.first == "region") {
+      options.region = kv.second;
+    } else if (kv.first == "scheme") {
+      options.scheme = kv.second;
+    } else if (kv.first == "endpoint_override") {
+      options.endpoint_override = kv.second;
+    } else {
+      return Status::Invalid("Unexpected query parameter in S3 URI: '", kv.first, "'");
+    }
   }
 
   return options;
@@ -267,7 +297,8 @@ bool S3Options::Equals(const S3Options& other) const {
   return (region == other.region && endpoint_override == other.endpoint_override &&
           scheme == other.scheme && background_writes == other.background_writes &&
           GetAccessKey() == other.GetAccessKey() &&
-          GetSecretKey() == other.GetSecretKey());
+          GetSecretKey() == other.GetSecretKey() &&
+          GetSessionToken() == other.GetSessionToken());
 }
 
 namespace {
@@ -404,13 +435,11 @@ Result<S3Model::GetObjectResult> GetObjectRange(Aws::S3::S3Client* client,
 }
 
 // A RandomAccessFile that reads from a S3 object
-class ObjectInputFile : public io::RandomAccessFile {
+class ObjectInputFile final : public io::RandomAccessFile {
  public:
-  ObjectInputFile(Aws::S3::S3Client* client, const S3Path& path)
-      : client_(client), path_(path) {}
-
-  ObjectInputFile(Aws::S3::S3Client* client, const S3Path& path, int64_t size)
-      : client_(client), path_(path), content_length_(size) {}
+  ObjectInputFile(std::shared_ptr<FileSystem> fs, Aws::S3::S3Client* client,
+                  const S3Path& path, int64_t size = kNoSize)
+      : fs_(std::move(fs)), client_(client), path_(path), content_length_(size) {}
 
   Status Init() {
     // Issue a HEAD Object to get the content-length and ensure any
@@ -460,6 +489,8 @@ class ObjectInputFile : public io::RandomAccessFile {
   // RandomAccessFile APIs
 
   Status Close() override {
+    fs_.reset();
+    client_ = nullptr;
     closed_ = true;
     return Status::OK();
   }
@@ -534,6 +565,7 @@ class ObjectInputFile : public io::RandomAccessFile {
   }
 
  protected:
+  std::shared_ptr<FileSystem> fs_;  // Owner of S3Client
   Aws::S3::S3Client* client_;
   S3Path path_;
   bool closed_ = false;
@@ -548,14 +580,14 @@ class ObjectInputFile : public io::RandomAccessFile {
 static constexpr int64_t kMinimumPartUpload = 5 * 1024 * 1024;
 
 // An OutputStream that writes to a S3 object
-class ObjectOutputStream : public io::OutputStream {
+class ObjectOutputStream final : public io::OutputStream {
  protected:
   struct UploadState;
 
  public:
-  ObjectOutputStream(Aws::S3::S3Client* client, const S3Path& path,
-                     const S3Options& options)
-      : client_(client), path_(path), options_(options) {}
+  ObjectOutputStream(std::shared_ptr<FileSystem> fs, Aws::S3::S3Client* client,
+                     const S3Path& path, const S3Options& options)
+      : fs_(std::move(fs)), client_(client), path_(path), options_(options) {}
 
   ~ObjectOutputStream() override {
     // For compliance with the rest of the IO stack, Close rather than Abort,
@@ -600,6 +632,8 @@ class ObjectOutputStream : public io::OutputStream {
           outcome.GetError());
     }
     current_part_.reset();
+    fs_.reset();
+    client_ = nullptr;
     closed_ = true;
     return Status::OK();
   }
@@ -645,6 +679,8 @@ class ObjectOutputStream : public io::OutputStream {
           outcome.GetError());
     }
 
+    fs_.reset();
+    client_ = nullptr;
     closed_ = true;
     return Status::OK();
   }
@@ -817,6 +853,7 @@ class ObjectOutputStream : public io::OutputStream {
   }
 
  protected:
+  std::shared_ptr<FileSystem> fs_;  // Owner of S3Client
   Aws::S3::S3Client* client_;
   S3Path path_;
   const S3Options& options_;
@@ -861,7 +898,7 @@ class S3FileSystem::Impl {
  public:
   S3Options options_;
   Aws::Client::ClientConfiguration client_config_;
-  Aws::Auth::AWSCredentials credentials_;
+  std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;
   std::unique_ptr<Aws::S3::S3Client> client_;
 
   const int32_t kListObjectsMaxKeys = 1000;
@@ -873,7 +910,7 @@ class S3FileSystem::Impl {
   explicit Impl(S3Options options) : options_(std::move(options)) {}
 
   Status Init() {
-    credentials_ = options_.credentials_provider->GetAWSCredentials();
+    credentials_provider_ = options_.credentials_provider;
     client_config_.region = ToAwsString(options_.region);
     client_config_.endpointOverride = ToAwsString(options_.endpoint_override);
     if (options_.scheme == "http") {
@@ -893,7 +930,7 @@ class S3FileSystem::Impl {
 
     bool use_virtual_addressing = options_.endpoint_override.empty();
     client_.reset(
-        new Aws::S3::S3Client(credentials_, client_config_,
+        new Aws::S3::S3Client(credentials_provider_, client_config_,
                               Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
                               use_virtual_addressing));
     return Status::OK();
@@ -1241,6 +1278,35 @@ class S3FileSystem::Impl {
     }
     return Status::OK();
   }
+
+  Result<std::shared_ptr<ObjectInputFile>> OpenInputFile(const std::string& s,
+                                                         S3FileSystem* fs) {
+    ARROW_ASSIGN_OR_RAISE(auto path, S3Path::FromString(s));
+    RETURN_NOT_OK(ValidateFilePath(path));
+
+    auto ptr =
+        std::make_shared<ObjectInputFile>(fs->shared_from_this(), client_.get(), path);
+    RETURN_NOT_OK(ptr->Init());
+    return ptr;
+  }
+
+  Result<std::shared_ptr<ObjectInputFile>> OpenInputFile(const FileInfo& info,
+                                                         S3FileSystem* fs) {
+    if (info.type() == FileType::NotFound) {
+      return ::arrow::fs::internal::PathNotFound(info.path());
+    }
+    if (info.type() != FileType::File && info.type() != FileType::Unknown) {
+      return ::arrow::fs::internal::NotAFile(info.path());
+    }
+
+    ARROW_ASSIGN_OR_RAISE(auto path, S3Path::FromString(info.path()));
+    RETURN_NOT_OK(ValidateFilePath(path));
+
+    auto ptr = std::make_shared<ObjectInputFile>(fs->shared_from_this(), client_.get(),
+                                                 path, info.size());
+    RETURN_NOT_OK(ptr->Init());
+    return ptr;
+  }
 };
 
 S3FileSystem::S3FileSystem(const S3Options& options) : impl_(new Impl{options}) {}
@@ -1496,56 +1562,22 @@ Status S3FileSystem::CopyFile(const std::string& src, const std::string& dest) {
 
 Result<std::shared_ptr<io::InputStream>> S3FileSystem::OpenInputStream(
     const std::string& s) {
-  ARROW_ASSIGN_OR_RAISE(auto path, S3Path::FromString(s));
-  RETURN_NOT_OK(ValidateFilePath(path));
-
-  auto ptr = std::make_shared<ObjectInputFile>(impl_->client_.get(), path);
-  RETURN_NOT_OK(ptr->Init());
-  return ptr;
+  return impl_->OpenInputFile(s, this);
 }
 
 Result<std::shared_ptr<io::InputStream>> S3FileSystem::OpenInputStream(
     const FileInfo& info) {
-  if (info.type() == FileType::NotFound) {
-    return ::arrow::fs::internal::PathNotFound(info.path());
-  }
-  if (info.type() != FileType::File && info.type() != FileType::Unknown) {
-    return ::arrow::fs::internal::NotAFile(info.path());
-  }
-
-  ARROW_ASSIGN_OR_RAISE(auto path, S3Path::FromString(info.path()));
-  RETURN_NOT_OK(ValidateFilePath(path));
-
-  auto ptr = std::make_shared<ObjectInputFile>(impl_->client_.get(), path, info.size());
-  RETURN_NOT_OK(ptr->Init());
-  return ptr;
+  return impl_->OpenInputFile(info, this);
 }
 
 Result<std::shared_ptr<io::RandomAccessFile>> S3FileSystem::OpenInputFile(
     const std::string& s) {
-  ARROW_ASSIGN_OR_RAISE(auto path, S3Path::FromString(s));
-  RETURN_NOT_OK(ValidateFilePath(path));
-
-  auto ptr = std::make_shared<ObjectInputFile>(impl_->client_.get(), path);
-  RETURN_NOT_OK(ptr->Init());
-  return ptr;
+  return impl_->OpenInputFile(s, this);
 }
 
 Result<std::shared_ptr<io::RandomAccessFile>> S3FileSystem::OpenInputFile(
     const FileInfo& info) {
-  if (info.type() == FileType::NotFound) {
-    return ::arrow::fs::internal::PathNotFound(info.path());
-  }
-  if (info.type() != FileType::File && info.type() != FileType::Unknown) {
-    return ::arrow::fs::internal::NotAFile(info.path());
-  }
-
-  ARROW_ASSIGN_OR_RAISE(auto path, S3Path::FromString(info.path()));
-  RETURN_NOT_OK(ValidateFilePath(path));
-
-  auto ptr = std::make_shared<ObjectInputFile>(impl_->client_.get(), path, info.size());
-  RETURN_NOT_OK(ptr->Init());
-  return ptr;
+  return impl_->OpenInputFile(info, this);
 }
 
 Result<std::shared_ptr<io::OutputStream>> S3FileSystem::OpenOutputStream(
@@ -1553,8 +1585,8 @@ Result<std::shared_ptr<io::OutputStream>> S3FileSystem::OpenOutputStream(
   ARROW_ASSIGN_OR_RAISE(auto path, S3Path::FromString(s));
   RETURN_NOT_OK(ValidateFilePath(path));
 
-  auto ptr =
-      std::make_shared<ObjectOutputStream>(impl_->client_.get(), path, impl_->options_);
+  auto ptr = std::make_shared<ObjectOutputStream>(
+      shared_from_this(), impl_->client_.get(), path, impl_->options_);
   RETURN_NOT_OK(ptr->Init());
   return ptr;
 }

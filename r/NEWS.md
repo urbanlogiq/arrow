@@ -17,11 +17,40 @@
   under the License.
 -->
 
-# arrow 1.0.0.9000
+# arrow 1.0.1.9000
+
+## Datasets
+
+* `write_dataset()` to Feather or Parquet files with partitioning. See the end of `vignette("dataset", package = "arrow")` for discussion and examples.
+* Datasets now have `head()`, `tail()`, and take (`[`) methods. `head()` is optimized but the others  may not be performant.
+* `collect()` gains an `as_data_frame` argument, default `TRUE` but when `FALSE` allows you to evaluate the accumulated `select` and `filter` query but keep the result in Arrow, not an R `data.frame`
+
+## AWS S3 support
+
+* S3 support is now enabled in binary macOS and Windows (Rtools40 only, i.e. R >= 4.0) packages. To enable it on Linux, you will need to build and install `aws-sdk-cpp` from source, then set the environment variable `EXTRA_CMAKE_FLAGS="-DARROW_S3=ON -DAWSSDK_SOURCE=SYSTEM"` prior to building the R package (with bundled C++ build, not with Arrow system libraries) from source.
+* File readers and writers (`read_parquet()`, `write_feather()`, et al.) now accept an `s3://` URI as the source or destination file, as do `open_dataset()` and `write_dataset()`. See `vignette("fs", package = "arrow")` for details.
+
+## Computation
+
+* Comparison (`==`, `>`, etc.) and boolean (`&`, `|`, `!`) operations, along with `is.na`, `%in%` and `match` (called `match_arrow()`), on Arrow Arrays and ChunkedArrays are now implemented in the C++ library.
+* Aggregation methods `min()`, `max()`, and `unique()` are implemented for Arrays and ChunkedArrays.
+* `dplyr` filter expressions on Arrow Tables and RecordBatches are now evaluated in the C++ library, rather than by pulling data into R and evaluating. This yields significant performance improvements.
+* `dim()` (`nrow`) for dplyr queries on Table/RecordBatch is now supported
+
+## Other improvements
+
+* `arrow` now depends on [`cpp11`](https://cpp11.r-lib.org/), which brings more robust UTF-8 handling and faster compilation
+
+# arrow 1.0.1
 
 ## Bug fixes
 
-* The `version` option to `write_parquet()` is now correctly implemented.
+* Filtering a Dataset that has multiple partition keys using an `%in%` expression now faithfully returns all relevant rows
+* Datasets can now have path segments in the root directory that start with `.` or `_`; files and subdirectories starting with those prefixes are still ignored
+* `open_dataset("~/path")` now correctly expands the path
+* The `version` option to `write_parquet()` is now correctly implemented
+* An UBSAN failure in the `parquet-cpp` library has been fixed
+* For bundled Linux builds, the logic for finding `cmake` is more robust, and you can now specify a `/path/to/cmake` by setting the `CMAKE` environment variable
 
 # arrow 1.0.0
 

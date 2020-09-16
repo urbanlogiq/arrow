@@ -957,8 +957,8 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
 
   int64_t Close() override { return ColumnWriterImpl::Close(); }
 
-  void WriteBatch(int64_t num_values, const int16_t* def_levels,
-                  const int16_t* rep_levels, const T* values) override {
+  int64_t WriteBatch(int64_t num_values, const int16_t* def_levels,
+                     const int16_t* rep_levels, const T* values) override {
     // We check for DataPage limits only after we have inserted the values. If a user
     // writes a large number of values, the DataPage size can be much above the limit.
     // The purpose of this chunking is to bound this. Even if a user writes large number
@@ -981,6 +981,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
       CheckDictionarySizeLimit();
     };
     DoInBatches(num_values, properties_->write_batch_size(), WriteChunk);
+    return value_offset;
   }
 
   void WriteBatchSpaced(int64_t num_values, const int16_t* def_levels,
@@ -1138,8 +1139,12 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
     if (descr_->max_definition_level() > 0) {
       // Minimal definition level for which spaced values are written
       int16_t min_spaced_def_level = descr_->max_definition_level();
-      if (descr_->schema_node()->is_optional()) {
-        min_spaced_def_level--;
+      const ::parquet::schema::Node* node = descr_->schema_node().get();
+      while (node != nullptr && !node->is_repeated()) {
+        if (node->is_optional()) {
+          min_spaced_def_level--;
+        }
+        node = node->parent();
       }
       for (int64_t i = 0; i < num_levels; ++i) {
         if (def_levels[i] == descr_->max_definition_level()) {
@@ -1149,7 +1154,6 @@ class TypedColumnWriterImpl : public ColumnWriterImpl, public TypedColumnWriter<
           ++spaced_values_to_write;
         }
       }
-
       WriteDefinitionLevels(num_levels, def_levels);
     } else {
       // Required field, write all values

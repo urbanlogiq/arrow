@@ -512,7 +512,7 @@ class PARQUET_NO_EXPORT StructReader : public ColumnReaderImpl {
       : ctx_(std::move(ctx)),
         schema_field_(schema_field),
         filtered_field_(std::move(filtered_field)),
-        struct_def_level_(schema_field.definition_level),
+        struct_def_level_(schema_field.level_info.def_level),
         children_(std::move(children)) {}
 
   Status NextBatch(int64_t records_to_read, std::shared_ptr<ChunkedArray>* out) override;
@@ -649,7 +649,9 @@ Status StructReader::NextBatch(int64_t records_to_read,
   // Gather children arrays and def levels
   for (auto& child : children_) {
     if (child->type() == ColumnReaderImpl::LIST) {
-      return Status::Invalid("Mix of struct and list types not yet supported");
+      return Status::NotImplemented(
+          "Reading structs of lists from Parquet files not yet supported: ",
+          field()->ToString());
     }
 
     std::shared_ptr<ChunkedArray> field;
@@ -713,8 +715,9 @@ Status GetReader(const SchemaField& field, const std::shared_ptr<ReaderContext>&
     std::unique_ptr<ColumnReaderImpl> child_reader;
     RETURN_NOT_OK(GetReader(*child, ctx, &child_reader));
     // Use the max definition/repetition level of the leaf here
-    out->reset(new NestedListReader(ctx, list_field, child->definition_level,
-                                    child->repetition_level, std::move(child_reader)));
+    out->reset(new NestedListReader(ctx, list_field, child->level_info.def_level,
+                                    child->level_info.rep_level,
+                                    std::move(child_reader)));
   } else if (type_id == ::arrow::Type::STRUCT) {
     std::vector<std::shared_ptr<Field>> child_fields;
     std::vector<std::unique_ptr<ColumnReaderImpl>> child_readers;

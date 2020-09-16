@@ -16,14 +16,13 @@
 // under the License.
 
 #include "./arrow_types.h"
+
 #if defined(ARROW_R_WITH_ARROW)
 
 #include <arrow/filesystem/filesystem.h>
 #include <arrow/filesystem/localfs.h>
 
 namespace fs = ::arrow::fs;
-
-RCPP_EXPOSED_ENUM_NODECL(arrow::fs::FileType)
 
 // FileInfo
 
@@ -223,11 +222,28 @@ std::shared_ptr<fs::SubTreeFileSystem> fs___SubTreeFileSystem__create(
 }
 
 // [[arrow::export]]
-Rcpp::List fs___FileSystemFromUri(const std::string& path) {
+cpp11::writable::list fs___FileSystemFromUri(const std::string& path) {
+  using cpp11::literals::operator"" _nm;
+
   std::string out_path;
   auto file_system = ValueOrStop(fs::FileSystemFromUri(path, &out_path));
-  return Rcpp::List::create(Rcpp::Named("fs") = file_system,
-                            Rcpp::Named("path") = out_path);
+  return cpp11::writable::list({"fs"_nm = file_system, "path"_nm = out_path});
+}
+
+// [[arrow::export]]
+void fs___CopyFiles(const std::shared_ptr<fs::FileSystem>& src_fs,
+                    const std::vector<std::string>& src_paths,
+                    const std::shared_ptr<fs::FileSystem>& dest_fs,
+                    const std::vector<std::string>& dest_paths, int64_t chunk_size,
+                    bool use_threads) {
+  std::vector<fs::FileLocator> sources(src_paths.size()), destinations(dest_paths.size());
+
+  for (size_t i = 0; i < src_paths.size(); ++i) {
+    sources[i] = {src_fs, src_paths[i]};
+    destinations[i] = {dest_fs, dest_paths[i]};
+  }
+
+  StopIfNotOk(fs::CopyFiles(sources, destinations, chunk_size, use_threads));
 }
 
 #endif

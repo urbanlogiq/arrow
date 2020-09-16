@@ -22,7 +22,7 @@ import multiprocessing as mp
 import sys
 
 from collections import OrderedDict
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from distutils.version import LooseVersion
 
 import hypothesis as h
@@ -2447,19 +2447,22 @@ class TestConvertMisc:
             expected = pd.DataFrame({'a': expected})
             tm.assert_frame_equal(result, expected)
 
-    def test_mixed_types_fails(self):
-        data = pd.DataFrame({'a': ['a', 1, 2.0]})
-        with pytest.raises(pa.ArrowTypeError):
-            pa.Table.from_pandas(data)
-
-        data = pd.DataFrame({'a': [1, True]})
-        with pytest.raises(pa.ArrowTypeError):
-            pa.Table.from_pandas(data)
-
-        data = pd.DataFrame({'a': ['a', 1, 2.0]})
-        expected_msg = 'Conversion failed for column a'
-        with pytest.raises(pa.ArrowTypeError, match=expected_msg):
-            pa.Table.from_pandas(data)
+    @pytest.mark.parametrize(
+        "data,error_type",
+        [
+            ({"a": ["a", 1, 2.0]}, pa.ArrowTypeError),
+            ({"a": ["a", 1, 2.0]}, pa.ArrowTypeError),
+            ({"a": [1, True]}, pa.ArrowTypeError),
+            ({"a": [True, "a"]}, pa.ArrowInvalid),
+            ({"a": [1, "a"]}, pa.ArrowInvalid),
+            ({"a": [1.0, "a"]}, pa.ArrowInvalid),
+        ],
+    )
+    def test_mixed_types_fails(self, data, error_type):
+        df = pd.DataFrame(data)
+        msg = "Conversion failed for column a with type object"
+        with pytest.raises(error_type, match=msg):
+            pa.Table.from_pandas(df)
 
     def test_strided_data_import(self):
         cases = []
@@ -3327,13 +3330,31 @@ def test_cast_timestamp_unit():
     assert result.equals(expected)
 
 
-def test_struct_with_timestamp_tz():
+def test_nested_with_timestamp_tz_round_trip():
+    ts = pd.Timestamp.now()
+    ts_dt = ts.to_pydatetime()
+    arr = pa.array([ts_dt], type=pa.timestamp('us', tz='America/New_York'))
+    struct = pa.StructArray.from_arrays([arr, arr], ['start', 'stop'])
+
+    result = struct.to_pandas()
+    restored = pa.array(result)
+    assert restored.equals(struct)
+
+
+def test_nested_with_timestamp_tz():
     # ARROW-7723
     ts = pd.Timestamp.now()
+    ts_dt = ts.to_pydatetime()
 
     # XXX: Ensure that this data does not get promoted to nanoseconds (and thus
     # integers) to preserve behavior in 0.15.1
     for unit in ['s', 'ms', 'us']:
+        if unit in ['s', 'ms']:
+            # This is used for verifying timezone conversion to micros are not
+            # important
+            def truncate(x): return x.replace(microsecond=0)
+        else:
+            def truncate(x): return x
         arr = pa.array([ts], type=pa.timestamp(unit))
         arr2 = pa.array([ts], type=pa.timestamp(unit, tz='America/New_York'))
 
@@ -3342,20 +3363,30 @@ def test_struct_with_timestamp_tz():
 
         result = arr3.to_pandas()
         assert isinstance(result[0]['start'], datetime)
+        assert result[0]['start'].tzinfo is None
         assert isinstance(result[0]['stop'], datetime)
+        assert result[0]['stop'].tzinfo is None
 
         result = arr4.to_pandas()
         assert isinstance(result[0]['start'], datetime)
+        assert result[0]['start'].tzinfo is not None
+        utc_dt = result[0]['start'].astimezone(timezone.utc)
+        assert truncate(utc_dt).replace(tzinfo=None) == truncate(ts_dt)
         assert isinstance(result[0]['stop'], datetime)
+        assert result[0]['stop'].tzinfo is not None
 
         # same conversion for table
         result = pa.table({'a': arr3}).to_pandas()
         assert isinstance(result['a'][0]['start'], datetime)
+        assert result['a'][0]['start'].tzinfo is None
         assert isinstance(result['a'][0]['stop'], datetime)
+        assert result['a'][0]['stop'].tzinfo is None
 
         result = pa.table({'a': arr4}).to_pandas()
         assert isinstance(result['a'][0]['start'], datetime)
+        assert result['a'][0]['start'].tzinfo is not None
         assert isinstance(result['a'][0]['stop'], datetime)
+        assert result['a'][0]['stop'].tzinfo is not None
 
 
 # ----------------------------------------------------------------------
@@ -3503,11 +3534,10 @@ def test_dictionary_from_pandas_specified_type():
     assert result.type.equals(typ)
     assert result.to_pylist() == ['a', 'b']
 
-    # mismatching values type -> raise error (for now a deprecation warning)
+    # mismatching values type -> raise error
     typ = pa.dictionary(index_type=pa.int8(), value_type=pa.int64())
-    with pytest.warns(FutureWarning):
+    with pytest.raises(pa.ArrowInvalid):
         result = pa.array(cat, type=typ)
-    assert result.to_pylist() == ['a', 'b']
 
     # mismatching order -> raise error (for now a deprecation warning)
     typ = pa.dictionary(
@@ -4032,19 +4062,25 @@ def test_timestamp_as_object_out_of_range():
 
 
 @pytest.mark.parametrize("resolution", ["s", "ms", "us"])
+@pytest.mark.parametrize("tz", [None, "America/New_York"])
 # One datetime outside nanosecond range, one inside nanosecond range:
 @pytest.mark.parametrize("dt", [datetime(1553, 1, 1), datetime(2020, 1, 1)])
-def test_timestamp_as_object_non_nanosecond(resolution, dt):
+def test_timestamp_as_object_non_nanosecond(resolution, tz, dt):
     # Timestamps can be converted Arrow and reloaded into Pandas with no loss
     # of information if the timestamp_as_object option is True.
-    arr = pa.array([dt], type=pa.timestamp(resolution))
-    result = arr.to_pandas(timestamp_as_object=True)
-    assert result.dtype == object
-    assert isinstance(result[0], datetime)
-    assert result[0] == dt
-
+    arr = pa.array([dt], type=pa.timestamp(resolution, tz=tz))
     table = pa.table({'a': arr})
-    result = table.to_pandas(timestamp_as_object=True)['a']
-    assert result.dtype == object
-    assert isinstance(result[0], datetime)
-    assert result[0] == dt
+
+    for result in [
+        arr.to_pandas(timestamp_as_object=True),
+        table.to_pandas(timestamp_as_object=True)['a']
+    ]:
+        assert result.dtype == object
+        assert isinstance(result[0], datetime)
+        if tz:
+            assert result[0].tzinfo is not None
+            expected = result[0].tzinfo.fromutc(dt)
+        else:
+            assert result[0].tzinfo is None
+            expected = dt
+        assert result[0] == expected
