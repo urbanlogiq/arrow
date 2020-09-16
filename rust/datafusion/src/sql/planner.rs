@@ -408,6 +408,29 @@ impl<S: SchemaProvider> SqlToRel<S> {
                             return_type: DataType::UInt64,
                         })
                     }
+                    "nullif" => {
+                        let rex_args = function
+                            .args
+                            .iter()
+                            .map(|a| {
+                                let expr = match a {
+                                    FunctionArg::Named { name: _, arg } => arg,
+                                    FunctionArg::Unnamed(arg) => arg,
+                                };
+                                self.sql_to_rex(expr, schema)
+                            })
+                            .collect::<Result<Vec<Expr>>>()?;
+
+                        if rex_args.len() != 2 {
+                            Err(ExecutionError::General("NULLIF needs two args (expr, expr)".to_string()))
+                        } else {
+                            Ok(Expr::BinaryExpr {
+                                left: Box::new(rex_args[0].clone()),
+                                op:   Operator::NullIf,
+                                right: Box::new(rex_args[1].clone()),
+                            })
+                        }
+                    }
                     _ => match self.schema_provider.get_function_meta(&name) {
                         Some(fm) => {
                             let rex_args = function
@@ -532,6 +555,16 @@ mod tests {
         let expected = "Projection: #id, #first_name, #last_name\
             \n  Selection: #state Eq Utf8(\"CO\") And #age GtEq Int64(21) And #age LtEq Int64(65)\
             \n    TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn select_where_nullif_division() {
+        let sql = "SELECT c3/(c4+c5) \
+                   FROM aggregate_test_100 WHERE c3/NULLIF(c4+c5, 0) > 0.1";
+        let expected = "Projection: #c3 Divide #c4 Plus #c5\
+            \n  Selection: #c3 Divide #c4 Plus #c5 NullIf Int64(0) Gt Float64(0.1)\
+            \n    TableScan: aggregate_test_100 projection=None";
         quick_test(sql, expected);
     }
 
