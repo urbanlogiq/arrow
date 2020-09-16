@@ -580,9 +580,9 @@ where
     ) {
         Ok(both_null_buff) => match both_null_buff {
             Some(buff) => buff,
-            _ => new_all_set_buffer(left.len()),
+            _ => new_all_set_buffer((left.len() + 7) / 8),  // number of bytes not bits
         },
-        _ => new_all_set_buffer(left.len()),
+        _ => new_all_set_buffer((left.len() + 7) / 8),  // number of bytes not bits
     };
     let not_both_null_bitmap = not_both_null_bit_buffer.data();
 
