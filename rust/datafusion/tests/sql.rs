@@ -120,6 +120,7 @@ fn parquet_single_nan_schema() {
 }
 
 #[test]
+#[ignore]
 fn parquet_query_int_array() {
     //TO DO: this test file is not part of parquet-testing submodule (Morgan, 16/03/2020)
     let mut ctx = ExecutionContext::new();
@@ -141,6 +142,7 @@ fn parquet_query_int_array() {
 }
 
 #[test]
+#[ignore]
 fn string_parquet_query_array() {
     //TODO: this test file is not part of parquet-testing submodule (Morgan, 16/03/2020)
     let mut ctx = ExecutionContext::new();
