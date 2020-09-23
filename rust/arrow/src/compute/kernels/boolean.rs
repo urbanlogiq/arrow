@@ -28,7 +28,6 @@ use std::sync::Arc;
 use crate::array::{Array, ArrayData, BooleanArray, PrimitiveArray};
 use crate::bitmap::Bitmap;
 use crate::buffer::Buffer;
-use crate::compute::kernels::comparison::new_all_set_buffer;
 use crate::compute::util::apply_bin_op_to_option_bitmap;
 use crate::datatypes::{ArrowNumericType, DataType};
 use crate::error::{ArrowError, Result};
