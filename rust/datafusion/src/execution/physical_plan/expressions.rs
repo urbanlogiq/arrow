@@ -38,7 +38,7 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::compute::kernels::arithmetic::{add, divide, multiply, subtract};
-use arrow::compute::kernels::boolean::{and, or, nullif};
+use arrow::compute::kernels::boolean::{and, nullif, or};
 use arrow::compute::kernels::cast::cast;
 use arrow::compute::kernels::comparison::{
     contains, contains_utf8, eq, eq_utf8, gt, gt_eq, gt_eq_utf8, gt_utf8, like_utf8, lt,
@@ -1031,7 +1031,6 @@ macro_rules! primitive_bool_array_op {
     }};
 }
 
-
 /// Invoke a boolean kernel on a pair of arrays
 macro_rules! boolean_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
@@ -1145,7 +1144,8 @@ impl PhysicalExpr for BinaryExpr {
             }
             Operator::NullIf => {
                 // Create inner Left == Predicate expression and evaluate it
-                let cond_expr = BinaryExpr::new(self.left.clone(), Operator::Eq, self.right.clone());
+                let cond_expr =
+                    BinaryExpr::new(self.left.clone(), Operator::Eq, self.right.clone());
                 let cond_array = cond_expr.evaluate(batch)?;
 
                 // Now, invoke nullif on the result
@@ -1390,7 +1390,9 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::execution::physical_plan::common::get_scalar_value;
-    use arrow::array::{Array, ArrayData, PrimitiveArray, StringArray, Time64NanosecondArray};
+    use arrow::array::{
+        Array, ArrayData, PrimitiveArray, StringArray, Time64NanosecondArray,
+    };
     use arrow::buffer::Buffer;
     use arrow::datatypes::*;
 
@@ -2007,6 +2009,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn nullif_int32() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let a = Int32Array::from(vec![Some(1), Some(2), None, None, Some(3), None, None, Some(4), Some(5)]);
@@ -2037,6 +2040,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     // Ensure that arrays with no nulls can also invoke NULLIF() correctly
     fn nullif_int32_nonulls() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);

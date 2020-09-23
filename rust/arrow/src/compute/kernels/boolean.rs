@@ -102,7 +102,10 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray> {
 
 /// Copies original array, setting null bit to true if a secondary comparison boolean array is set to true.
 /// Typically used to implement NULLIF.
-pub fn nullif<T>(left: &PrimitiveArray<T>, right: &BooleanArray) -> Result<PrimitiveArray<T>>
+pub fn nullif<T>(
+    left: &PrimitiveArray<T>,
+    right: &BooleanArray,
+) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
 {
@@ -127,14 +130,17 @@ where
     // Do the right expression !(right_values & right_bitmap) first since there are two steps
     // TRICK: convert BooleanArray buffer as a bitmap for faster operation
     let right_combo_buffer = match right.data().null_bitmap() {
-        Some(right_bitmap) => (&right.values() & &right_bitmap.bits).ok().map(|b| b.not()),
-        None                => Some(!&right.values()),
+        Some(right_bitmap) => {
+            (&right.values() & &right_bitmap.bits).ok().map(|b| b.not())
+        }
+        None => Some(!&right.values()),
     };
 
     let modified_null_buffer = apply_bin_op_to_option_bitmap(
         left_data.null_bitmap(),
         &right_combo_buffer.map(|buf| Bitmap::from(buf)),
-        |a, b| a & b)?;
+        |a, b| a & b,
+    )?;
 
     // Construct new array with same values but modified null bitmap
     let data = ArrayData::new(
@@ -211,15 +217,16 @@ mod tests {
     #[test]
     fn test_nullif_int_array() {
         let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9)]);
-        let comp = BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
+        let comp =
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
         let res = nullif(&a, &comp).unwrap();
 
         assert_eq!(15, res.value(0));
         assert_eq!(true, res.is_null(1));
-        assert_eq!(true, res.is_null(2));  // comp true, slot 2 turned into null
+        assert_eq!(true, res.is_null(2)); // comp true, slot 2 turned into null
         assert_eq!(1, res.value(3));
         // Even though comp array / right is null, should still pass through original value
         assert_eq!(9, res.value(4));
-        assert_eq!(false, res.is_null(4));  // comp true, slot 2 turned into null
+        assert_eq!(false, res.is_null(4)); // comp true, slot 2 turned into null
     }
 }

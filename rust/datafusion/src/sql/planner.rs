@@ -422,11 +422,13 @@ impl<S: SchemaProvider> SqlToRel<S> {
                             .collect::<Result<Vec<Expr>>>()?;
 
                         if rex_args.len() != 2 {
-                            Err(ExecutionError::General("NULLIF needs two args (expr, expr)".to_string()))
+                            Err(ExecutionError::General(
+                                "NULLIF needs two args (expr, expr)".to_string(),
+                            ))
                         } else {
                             Ok(Expr::BinaryExpr {
                                 left: Box::new(rex_args[0].clone()),
-                                op:   Operator::NullIf,
+                                op: Operator::NullIf,
                                 right: Box::new(rex_args[1].clone()),
                             })
                         }
