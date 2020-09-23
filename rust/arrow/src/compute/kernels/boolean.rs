@@ -22,6 +22,7 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
+use std::ops::Not;
 use std::sync::Arc;
 
 use crate::array::{Array, ArrayData, BooleanArray, PrimitiveArray};
@@ -113,28 +114,27 @@ where
     }
     let left_data = left.data();
 
-    // set = not null.  Set initial bitmap to null if either one is null.
-    // If there is no bitmap, create a new one with all values valid for nullity op later
-    let combined_null_buffer = match apply_bin_op_to_option_bitmap(
-        left_data.null_bitmap(),
-        right.data().null_bitmap(),
-        |a, b| a & b,
-    ) {
-        Ok(mod_null_buf) => match mod_null_buf {
-            Some(buff) => buff,
-            _ => new_all_set_buffer((left.len() + 7) / 8),  // number of bytes not bits
-        },
-        _ => new_all_set_buffer((left.len() + 7) / 8),
+    // If left has no bitmap, create a new one with all values set for nullity op later
+    // left=0 (null)   right=null       output bitmap=null
+    // left=0          right=1          output bitmap=null
+    // left=1 (set)    right=null       output bitmap=set   (passthrough)
+    // left=1          right=1 & comp=true    output bitmap=null
+    // left=1          right=1 & comp=false   output bitmap=set
+    //
+    // Thus: result = left null bitmap & (!right_values | !right_bitmap)
+    //              OR left null bitmap & !(right_values & right_bitmap)
+    //
+    // Do the right expression !(right_values & right_bitmap) first since there are two steps
+    // TRICK: convert BooleanArray buffer as a bitmap for faster operation
+    let right_combo_buffer = match right.data().null_bitmap() {
+        Some(right_bitmap) => (&right.values() & &right_bitmap.bits).ok().map(|b| b.not()),
+        None                => Some(!&right.values()),
     };
 
-    // For every nonnull, if comparison array is true at position, clear bitmap to null
-    // TRICK: convert BooleanArray buffer as a bitmap for faster operation
-    let combo_null_bitmap = Bitmap::from(combined_null_buffer);
-    let comparison_bitmap = Bitmap::from(right.values());
     let modified_null_buffer = apply_bin_op_to_option_bitmap(
-                                   &Some(combo_null_bitmap),
-                                   &Some(comparison_bitmap),
-                                   |a, b| a & &!b)?;
+        left_data.null_bitmap(),
+        &right_combo_buffer.map(|buf| Bitmap::from(buf)),
+        |a, b| a & b)?;
 
     // Construct new array with same values but modified null bitmap
     let data = ArrayData::new(
@@ -211,13 +211,15 @@ mod tests {
     #[test]
     fn test_nullif_int_array() {
         let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9)]);
-        let comp = BooleanArray::from(vec![Some(false), None, Some(true), Some(false), Some(false)]);
+        let comp = BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
         let res = nullif(&a, &comp).unwrap();
 
         assert_eq!(15, res.value(0));
         assert_eq!(true, res.is_null(1));
         assert_eq!(true, res.is_null(2));  // comp true, slot 2 turned into null
         assert_eq!(1, res.value(3));
+        // Even though comp array / right is null, should still pass through original value
         assert_eq!(9, res.value(4));
+        assert_eq!(false, res.is_null(4));  // comp true, slot 2 turned into null
     }
 }
