@@ -120,6 +120,7 @@ fn parquet_single_nan_schema() {
 }
 
 #[test]
+#[ignore]
 fn parquet_query_int_array() {
     //TO DO: this test file is not part of parquet-testing submodule (Morgan, 16/03/2020)
     let mut ctx = ExecutionContext::new();
@@ -141,6 +142,7 @@ fn parquet_query_int_array() {
 }
 
 #[test]
+#[ignore]
 fn string_parquet_query_array() {
     //TODO: this test file is not part of parquet-testing submodule (Morgan, 16/03/2020)
     let mut ctx = ExecutionContext::new();
@@ -293,6 +295,21 @@ fn csv_query_avg_multi_batch() -> Result<()> {
     // Due to float number's accuracy, different batch size will lead to different
     // answers.
     assert!((expected - actual).abs() < 0.01);
+    Ok(())
+}
+
+#[test]
+fn csv_query_nullif_divide_by_0() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx)?;
+    let sql = "SELECT c8/nullif(c7, 0) FROM aggregate_test_100";
+    let actual = execute(&mut ctx, sql).join("\n");
+    let expected = "1722\n92\n46\n679\n165\n146\n149\n93\n2211\n6495\n307\n139\n253\n123\n21\n84\n98\n13\n230\n\
+       277\n1\n986\n414\n144\n210\n0\n172\n165\n25\n97\n335\n558\n350\n369\n511\n245\n345\n8\n139\n55\n318\n2614\n\
+       1792\n16\n345\n123\n176\n1171\n20\n199\n147\n115\n335\n23\n847\n94\n315\n391\n176\n282\n459\n197\n978\n281\n\
+       27\n26\n281\n8124\n3\n430\n510\n61\n67\n17\n1601\n362\n202\n50\n10\n346\n258\n664\n0\n22\n164\n448\n365\n\
+       1640\n671\n203\n2087\n10060\n1015\n913\n9840\n16\n496\n264\n38\n1";
+    assert_eq!(expected, actual);
     Ok(())
 }
 

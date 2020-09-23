@@ -38,7 +38,7 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::compute::kernels::arithmetic::{add, divide, multiply, subtract};
-use arrow::compute::kernels::boolean::{and, or};
+use arrow::compute::kernels::boolean::{and, nullif, or};
 use arrow::compute::kernels::cast::cast;
 use arrow::compute::kernels::comparison::{
     contains, contains_utf8, eq, eq_utf8, gt, gt_eq, gt_eq_utf8, gt_utf8, like_utf8, lt,
@@ -931,6 +931,21 @@ macro_rules! compute_list_array_utf8_op {
     }};
 }
 
+/// Invoke a compute kernel on a primitive array and a Boolean Array
+macro_rules! compute_bool_array_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("compute_op failed to downcast array");
+        Ok(Arc::new($OP(&ll, &rr)?))
+    }};
+}
+
 macro_rules! binary_string_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
@@ -994,6 +1009,28 @@ macro_rules! binary_array_op {
     }};
 }
 
+/// Binary op between primitive and boolean arrays
+macro_rules! primitive_bool_array_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        match $LEFT.data_type() {
+            DataType::Int8 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Int8Array),
+            DataType::Int16 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Int16Array),
+            DataType::Int32 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Int32Array),
+            DataType::Int64 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Int64Array),
+            DataType::UInt8 => compute_bool_array_op!($LEFT, $RIGHT, $OP, UInt8Array),
+            DataType::UInt16 => compute_bool_array_op!($LEFT, $RIGHT, $OP, UInt16Array),
+            DataType::UInt32 => compute_bool_array_op!($LEFT, $RIGHT, $OP, UInt32Array),
+            DataType::UInt64 => compute_bool_array_op!($LEFT, $RIGHT, $OP, UInt64Array),
+            DataType::Float32 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Float32Array),
+            DataType::Float64 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Float64Array),
+            other => Err(ExecutionError::General(format!(
+                "Unsupported data type {:?} for NULLIF/primitive/boolean operator",
+                other
+            ))),
+        }
+    }};
+}
+
 /// Invoke a boolean kernel on a pair of arrays
 macro_rules! boolean_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
@@ -1038,8 +1075,12 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        // binary operator should always return a boolean value
-        Ok(false)
+        match &self.op {
+            // NullIF is nullable since original array is nullable
+            Operator::NullIf => Ok(true),
+            // other binary operators should always return a boolean value
+            _ => Ok(false),
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
@@ -1100,6 +1141,15 @@ impl PhysicalExpr for BinaryExpr {
                         right.data_type()
                     )));
                 }
+            }
+            Operator::NullIf => {
+                // Create inner Left == Predicate expression and evaluate it
+                let cond_expr =
+                    BinaryExpr::new(self.left.clone(), Operator::Eq, self.right.clone());
+                let cond_array = cond_expr.evaluate(batch)?;
+
+                // Now, invoke nullif on the result
+                primitive_bool_array_op!(left, cond_array, nullif)
             }
             _ => Err(ExecutionError::General("Unsupported operator".to_string())),
         }
@@ -1340,7 +1390,9 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::execution::physical_plan::common::get_scalar_value;
-    use arrow::array::{ArrayData, PrimitiveArray, StringArray, Time64NanosecondArray};
+    use arrow::array::{
+        Array, ArrayData, PrimitiveArray, StringArray, Time64NanosecondArray,
+    };
     use arrow::buffer::Buffer;
     use arrow::datatypes::*;
 
@@ -1407,7 +1459,7 @@ mod tests {
         )?;
 
         // expression: "a >] b"
-        let contains = binary(col(0, &schema), Operator::Contains, col(1, &schema));
+        let contains = binary(col("a"), Operator::Contains, col("b"));
 
         let result = contains.evaluate(&batch)?;
         assert_eq!(result.len(), 3);
@@ -1956,6 +2008,58 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    #[rustfmt::skip]
+    fn nullif_int32() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![Some(1), Some(2), None, None, Some(3), None, None, Some(4), Some(5)]);
+        let a_len = a.len();
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        let literal_expr = lit(ScalarValue::Int32(2));
+        let lt = binary(col("a"), Operator::NullIf, literal_expr);
+
+        // Results should be: Some(1), None, None, None, Some(3), None
+        let result = lt.evaluate(&batch)?;
+        assert_eq!(result.len(), a_len);
+
+        let result = result
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("failed to downcast to Int32Array");
+
+        assert_eq!(1, result.value(0));
+        assert_eq!(true, result.is_null(1));    // 2==2, slot 1 turned into null
+        assert_eq!(true, result.is_null(2));
+        assert_eq!(true, result.is_null(3));
+        assert_eq!(3, result.value(4));
+        assert_eq!(true, result.is_null(5));
+        assert_eq!(true, result.is_null(6));
+        assert_eq!(5, result.value(8));
+        Ok(())
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    // Ensure that arrays with no nulls can also invoke NULLIF() correctly
+    fn nullif_int32_nonulls() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
+        let a_len = a.len();
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+
+        let literal_expr = lit(ScalarValue::Int32(1));
+        let lt = binary(col("a"), Operator::NullIf, literal_expr);
+
+        let result = lt.evaluate(&batch)?;
+        assert_eq!(result.len(), a_len);
+
+        let expected = Int32Array::from(vec![None, Some(3), Some(10), Some(7),
+                                             Some(8), None, Some(2), Some(4), Some(5)]);
+        assert_array_eq::<Int32Type>(expected, result);
+        Ok(())
+    }
+
     fn do_sum(batch: &RecordBatch) -> Result<Option<ScalarValue>> {
         let sum = sum(col("a"));
         let accum = sum.create_accumulator();
@@ -2120,7 +2224,11 @@ mod tests {
             .expect("Actual array should unwrap to type of expected array");
 
         for i in 0..expected.len() {
-            assert_eq!(expected.value(i), actual.value(i));
+            if expected.is_null(i) {
+                assert!(actual.is_null(i));
+            } else {
+                assert_eq!(expected.value(i), actual.value(i));
+            }
         }
     }
 

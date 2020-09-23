@@ -125,6 +125,8 @@ pub enum Operator {
     Like,
     /// Does not match a wildcard pattern
     NotLike,
+    /// If left side equal to right side, NULL, otherwise retain left value
+    NullIf,
 }
 
 impl fmt::Display for Operator {
@@ -147,6 +149,7 @@ impl fmt::Display for Operator {
             Operator::Like => "LIKE",
             Operator::NotLike => "NOT LIKE",
             Operator::Contains => ">]",
+            Operator::NullIf => "NULLIF",
         };
         write!(f, "{}", display)
     }
@@ -395,6 +398,7 @@ impl Expr {
                 Operator::Gt | Operator::GtEq => Ok(DataType::Boolean),
                 Operator::And | Operator::Or => Ok(DataType::Boolean),
                 Operator::Contains => Ok(DataType::Boolean),
+                Operator::NullIf => left.get_type(schema),
                 _ => {
                     let left_type = left.get_type(schema)?;
                     let right_type = right.get_type(schema)?;

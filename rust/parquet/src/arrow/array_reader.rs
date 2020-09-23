@@ -2031,6 +2031,7 @@ mod tests {
     }
 
     #[test] //TODO: this test file is not in the testing submodule yet (Morgan 03-18-2020)
+    #[ignore]
     fn test_create_list_array_reader() {
         let file = get_test_file("tiny_int_array.parquet");
         let file_reader = Rc::new(SerializedFileReader::new(file).unwrap());
@@ -2063,7 +2064,7 @@ mod tests {
         let sublist_0 = array.value(0);
         let sublist_0 = sublist_0
             .as_any()
-            .downcast_ref::<PrimitiveArray<ArrowInt64>>()
+            .downcast_ref::<PrimitiveArray<ArrowInt64Type>>()
             .unwrap();
 
         assert_eq!(2, sublist_0.len());
