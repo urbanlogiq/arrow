@@ -51,7 +51,8 @@ use arrow::{
     datatypes::Field,
 };
 
-fn format_state_name(name: &str, state_name: &str) -> String {
+/// returns the name of the state
+pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
 }
 
@@ -402,8 +403,9 @@ impl AggregateExpr for Avg {
     }
 }
 
+/// An accumulator to compute the average
 #[derive(Debug)]
-struct AvgAccumulator {
+pub(crate) struct AvgAccumulator {
     // sum is used for null
     sum: ScalarValue,
     count: u64,
@@ -581,12 +583,9 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::Utf8 => {
             typed_min_max_batch_string!(values, StringArray, Utf8, min_string)
         }
-        DataType::LargeUtf8 => typed_min_max_batch_string!(
-            values,
-            LargeStringArray,
-            LargeUtf8,
-            min_large_string
-        ),
+        DataType::LargeUtf8 => {
+            typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, min_string)
+        }
         _ => min_max_batch!(values, min),
     })
 }
@@ -597,12 +596,9 @@ fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
         DataType::Utf8 => {
             typed_min_max_batch_string!(values, StringArray, Utf8, max_string)
         }
-        DataType::LargeUtf8 => typed_min_max_batch_string!(
-            values,
-            LargeStringArray,
-            LargeUtf8,
-            max_large_string
-        ),
+        DataType::LargeUtf8 => {
+            typed_min_max_batch_string!(values, LargeStringArray, LargeUtf8, max_string)
+        }
         _ => min_max_batch!(values, max),
     })
 }

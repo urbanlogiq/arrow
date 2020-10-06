@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use super::{aggregates, empty::EmptyExec, expressions::binary, functions};
+use super::{aggregates, empty::EmptyExec, expressions::binary, functions, udaf};
 use crate::error::{ExecutionError, Result};
 use crate::execution::context::ExecutionContextState;
 use crate::logical_plan::{
@@ -482,6 +482,19 @@ impl DefaultPhysicalPlanner {
                     e.name(input_schema)?,
                 )
             }
+            Expr::AggregateUDF { fun, args, .. } => {
+                let args = args
+                    .iter()
+                    .map(|e| self.create_physical_expr(e, input_schema, ctx_state))
+                    .collect::<Result<Vec<_>>>()?;
+
+                udaf::create_aggregate_expr(
+                    fun,
+                    &args,
+                    input_schema,
+                    e.name(input_schema)?,
+                )
+            }
             other => Err(ExecutionError::General(format!(
                 "Invalid aggregate expression '{:?}'",
                 other
@@ -540,6 +553,7 @@ mod tests {
         datatypes::{DataType, Field, SchemaRef},
         record_batch::RecordBatchReader,
     };
+    use async_trait::async_trait;
     use fmt::Debug;
     use std::{any::Any, collections::HashMap, fmt, sync::Mutex};
 
@@ -548,6 +562,7 @@ mod tests {
             datasources: HashMap::new(),
             scalar_functions: HashMap::new(),
             var_provider: HashMap::new(),
+            aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
         }
     }
@@ -759,7 +774,13 @@ mod tests {
         schema: SchemaRef,
     }
 
+    #[async_trait]
     impl ExecutionPlan for NoOpExecutionPlan {
+        /// Return a reference to Any that can be used for downcasting
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
         fn schema(&self) -> SchemaRef {
             self.schema.clone()
         }
@@ -780,7 +801,7 @@ mod tests {
         }
 
         /// Execute one partition and return an iterator over RecordBatch
-        fn execute(
+        async fn execute(
             &self,
             _partition: usize,
         ) -> Result<Arc<Mutex<dyn RecordBatchReader + Send + Sync>>> {

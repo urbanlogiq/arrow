@@ -17,6 +17,7 @@
 
 //! Defines the execution plan for the hash aggregate operation
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -40,6 +41,8 @@ use arrow::{
 use fnv::FnvHashMap;
 
 use super::{common, expressions::Column};
+
+use async_trait::async_trait;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone)]
@@ -115,7 +118,13 @@ impl HashAggregateExec {
     }
 }
 
+#[async_trait]
 impl ExecutionPlan for HashAggregateExec {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -136,11 +145,11 @@ impl ExecutionPlan for HashAggregateExec {
         self.input.output_partitioning()
     }
 
-    fn execute(
+    async fn execute(
         &self,
         partition: usize,
     ) -> Result<Arc<Mutex<dyn RecordBatchReader + Send + Sync>>> {
-        let input = self.input.execute(partition)?;
+        let input = self.input.execute(partition).await?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
         if self.group_expr.is_empty() {
@@ -723,8 +732,8 @@ mod tests {
         ))
     }
 
-    #[test]
-    fn aggregate() -> Result<()> {
+    #[tokio::test]
+    async fn aggregate() -> Result<()> {
         let (schema, batches) = some_data().unwrap();
 
         let input: Arc<dyn ExecutionPlan> = Arc::new(
@@ -747,7 +756,7 @@ mod tests {
             input,
         )?);
 
-        let result = common::collect(partial_aggregate.execute(0)?)?;
+        let result = common::collect(partial_aggregate.execute(0).await?)?;
 
         let keys = result[0]
             .column(0)
@@ -786,7 +795,7 @@ mod tests {
             merge,
         )?);
 
-        let result = common::collect(merged_aggregate.execute(0)?)?;
+        let result = common::collect(merged_aggregate.execute(0).await?)?;
         assert_eq!(result.len(), 1);
 
         let batch = &result[0];

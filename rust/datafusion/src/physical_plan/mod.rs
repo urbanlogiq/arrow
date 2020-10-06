@@ -17,6 +17,7 @@
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display};
 use std::rc::Rc;
@@ -28,6 +29,8 @@ use crate::{error::Result, scalar::ScalarValue};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::{array::ArrayRef, datatypes::Field};
+
+use async_trait::async_trait;
 
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
@@ -41,7 +44,11 @@ pub trait PhysicalPlanner {
 }
 
 /// Partition-aware execution plan for a relation
+#[async_trait]
 pub trait ExecutionPlan: Debug + Send + Sync {
+    /// Returns the execution plan as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef;
     /// Specifies the output partitioning scheme of this plan
@@ -61,7 +68,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
     /// Execute one partition and return an iterator over RecordBatch
-    fn execute(
+    async fn execute(
         &self,
         partition: usize,
     ) -> Result<Arc<Mutex<dyn RecordBatchReader + Send + Sync>>>;
@@ -202,4 +209,5 @@ pub mod projection;
 pub mod sort;
 pub mod string_expressions;
 pub mod type_coercion;
+pub mod udaf;
 pub mod udf;

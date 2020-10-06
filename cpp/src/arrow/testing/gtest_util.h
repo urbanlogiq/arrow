@@ -108,7 +108,7 @@
   } while (false);
 
 #define ASSIGN_OR_HANDLE_ERROR_IMPL(handle_error, status_name, lhs, rexpr) \
-  auto status_name = (rexpr);                                              \
+  auto&& status_name = (rexpr);                                            \
   handle_error(status_name.status());                                      \
   lhs = std::move(status_name).ValueOrDie();
 
@@ -254,7 +254,7 @@ ARROW_TESTING_EXPORT void TestInitialized(const Array& array);
 
 template <typename BuilderType>
 void FinishAndCheckPadding(BuilderType* builder, std::shared_ptr<Array>* out) {
-  ASSERT_OK(builder->Finish(out));
+  ASSERT_OK_AND_ASSIGN(*out, builder->Finish());
   AssertZeroPadded(**out);
   TestInitialized(**out);
 }

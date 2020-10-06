@@ -328,6 +328,10 @@ Result<std::unique_ptr<parquet::arrow::FileReader>> ParquetFileFormat::GetReader
     arrow_properties.set_batch_size(options->batch_size);
   }
 
+  if (context && !context->use_threads) {
+    arrow_properties.set_use_threads(reader_options.enable_parallel_column_conversion);
+  }
+
   std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
   RETURN_NOT_OK(parquet::arrow::FileReader::Make(
       pool, std::move(reader), std::move(arrow_properties), &arrow_reader));
@@ -563,9 +567,9 @@ Result<FragmentVector> ParquetFileFragment::SplitByRowGroup(
   FragmentVector fragments(row_groups.size());
   auto fragment = fragments.begin();
   for (auto&& row_group : row_groups) {
-    ARROW_ASSIGN_OR_RAISE(*fragment++,
-                          parquet_format_.MakeFragment(source_, partition_expression(),
-                                                       {std::move(row_group)}));
+    ARROW_ASSIGN_OR_RAISE(*fragment++, parquet_format_.MakeFragment(
+                                           source_, partition_expression(),
+                                           {std::move(row_group)}, physical_schema_));
   }
 
   return fragments;

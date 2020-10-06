@@ -18,6 +18,7 @@
 //! FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 //! include in its output batches.
 
+use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use crate::error::{ExecutionError, Result};
@@ -27,6 +28,8 @@ use arrow::compute::filter;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
+
+use async_trait::async_trait;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
@@ -57,7 +60,13 @@ impl FilterExec {
     }
 }
 
+#[async_trait]
 impl ExecutionPlan for FilterExec {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
         // The filter operator does not make any changes to the schema of its input
@@ -88,14 +97,14 @@ impl ExecutionPlan for FilterExec {
         }
     }
 
-    fn execute(
+    async fn execute(
         &self,
         partition: usize,
     ) -> Result<Arc<Mutex<dyn RecordBatchReader + Send + Sync>>> {
         Ok(Arc::new(Mutex::new(FilterExecIter {
             schema: self.input.schema().clone(),
             predicate: self.predicate.clone(),
-            input: self.input.execute(partition)?,
+            input: self.input.execute(partition).await?,
         })))
     }
 }
@@ -165,8 +174,8 @@ mod tests {
     use crate::test;
     use std::iter::Iterator;
 
-    #[test]
-    fn simple_predicate() -> Result<()> {
+    #[tokio::test]
+    async fn simple_predicate() -> Result<()> {
         let schema = test::aggr_test_schema();
 
         let partitions = 4;
@@ -195,7 +204,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, Arc::new(csv))?);
 
-        let results = test::execute(filter)?;
+        let results = test::execute(filter).await?;
 
         results
             .iter()

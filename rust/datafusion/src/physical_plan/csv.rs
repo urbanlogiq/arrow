@@ -17,6 +17,7 @@
 
 //! Execution plan for reading CSV files
 
+use std::any::Any;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 
@@ -27,6 +28,8 @@ use arrow::csv;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
+
+use async_trait::async_trait;
 
 /// CSV file read option
 #[derive(Copy, Clone)]
@@ -178,7 +181,13 @@ impl CsvExec {
     }
 }
 
+#[async_trait]
 impl ExecutionPlan for CsvExec {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
         self.projected_schema.clone()
@@ -208,7 +217,7 @@ impl ExecutionPlan for CsvExec {
         }
     }
 
-    fn execute(
+    async fn execute(
         &self,
         partition: usize,
     ) -> Result<Arc<Mutex<dyn RecordBatchReader + Send + Sync>>> {
@@ -270,8 +279,8 @@ mod tests {
     use super::*;
     use crate::test::{aggr_test_schema, arrow_testdata_path};
 
-    #[test]
-    fn csv_exec_with_projection() -> Result<()> {
+    #[tokio::test]
+    async fn csv_exec_with_projection() -> Result<()> {
         let schema = aggr_test_schema();
         let testdata = arrow_testdata_path();
         let filename = "aggregate_test_100.csv";
@@ -285,7 +294,7 @@ mod tests {
         assert_eq!(13, csv.schema.fields().len());
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
-        let it = csv.execute(0)?;
+        let it = csv.execute(0).await?;
         let mut it = it.lock().unwrap();
         let batch = it.next_batch()?.unwrap();
         assert_eq!(3, batch.num_columns());
@@ -297,8 +306,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn csv_exec_without_projection() -> Result<()> {
+    #[tokio::test]
+    async fn csv_exec_without_projection() -> Result<()> {
         let schema = aggr_test_schema();
         let testdata = arrow_testdata_path();
         let filename = "aggregate_test_100.csv";
@@ -308,7 +317,7 @@ mod tests {
         assert_eq!(13, csv.schema.fields().len());
         assert_eq!(13, csv.projected_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
-        let it = csv.execute(0)?;
+        let it = csv.execute(0).await?;
         let mut it = it.lock().unwrap();
         let batch = it.next_batch()?.unwrap();
         assert_eq!(13, batch.num_columns());
