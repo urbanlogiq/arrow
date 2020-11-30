@@ -859,6 +859,25 @@ async fn csv_query_sum_cast() {
 }
 
 #[tokio::test]
+async fn query_where_neg_num() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+
+    // Negative numbers do not parse correctly as of Arrow 2.0.0
+    let sql = "select c7, c8 from aggregate_test_100 where c7 >= -2 and c7 < 10";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![
+        "7\t45465",
+        "5\t40622",
+        "0\t61069",
+        "2\t20120",
+        "4\t39363",
+    ];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn like() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;

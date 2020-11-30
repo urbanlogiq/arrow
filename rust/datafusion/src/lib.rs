@@ -16,6 +16,7 @@
 // under the License.
 
 #![warn(missing_docs)]
+#![feature(box_patterns)]
 
 //! DataFusion is an extensible query execution framework that uses
 //! Apache Arrow as the memory model.
