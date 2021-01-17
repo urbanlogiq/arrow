@@ -54,8 +54,8 @@ crossbeam = "0.7"
 paste = "0.1"
 num_cpus = "1.13.0"
 chrono = "0.4"
-async-trait = "0.1.36"
-tokio = { version = "0.2", features = ["macros", "rt-core", "rt-threaded"] }
+async-trait = "0.1.42"
+tokio = { version = "0.3", features = ["macros", "rt", "rt-multi-thread"] }
 
 [dev-dependencies]
 rand = "0.7"
