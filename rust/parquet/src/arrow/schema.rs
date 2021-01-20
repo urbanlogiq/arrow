@@ -44,6 +44,13 @@ pub fn parquet_to_arrow_schema(
     parquet_schema: &SchemaDescriptor,
     key_value_metadata: &Option<Vec<KeyValue>>,
 ) -> Result<Schema> {
+    // TODO: mburke 2021-01-19 Right now we have Big Time Problems resolving the embedded
+    // Arrow schema for datetime with the data types used by DataFusion, as the former
+    // has timezone information and the latter explcitly sets the timezone to None.
+    // So, instead of using the embedded Arrow schema we ignore it and derive the
+    // schema from the columns instead.
+    // see: https://issues.apache.org/jira/browse/ARROW-11324
+    /*
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     metadata
         .remove(super::ARROW_SCHEMA_META_KEY)
@@ -53,6 +60,12 @@ pub fn parquet_to_arrow_schema(
             0..parquet_schema.columns().len(),
             key_value_metadata,
         ))
+    */
+    parquet_to_arrow_schema_by_columns(
+            parquet_schema,
+            0..parquet_schema.columns().len(),
+            key_value_metadata,
+        )
 }
 
 /// Convert parquet schema to arrow schema including optional metadata,
@@ -119,10 +132,17 @@ where
     T: IntoIterator<Item = usize>,
 {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
-    let arrow_schema_metadata = metadata
+    let arrow_schema_metadata: Option<Schema> = None;
+    // TODO: mburke 2021-01-19 Right now we have Big Time Problems resolving the embedded
+    // Arrow schema for datetime with the data types used by DataFusion, as the former
+    // has timezone information and the latter explcitly sets the timezone to None.
+    // So, instead of using the embedded Arrow schema we ignore it and derive the
+    // schema from the columns instead.
+    // see: https://issues.apache.org/jira/browse/ARROW-11324
+    /*metadata
         .remove(super::ARROW_SCHEMA_META_KEY)
         .map(|encoded| get_arrow_schema_from_metadata(&encoded))
-        .map_or(Ok(None), |v| v.map(Some))?;
+        .map_or(Ok(None), |v| v.map(Some))?;*/
 
     // add the Arrow metadata to the Parquet metadata
     if let Some(arrow_schema) = &arrow_schema_metadata {
