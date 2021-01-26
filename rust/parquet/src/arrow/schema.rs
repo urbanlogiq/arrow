@@ -451,7 +451,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                         .build()?,
                 )])
                 .with_logical_type(LogicalType::LIST)
-                .with_repetition(Repetition::REQUIRED)
+                .with_repetition(repetition)
                 .build()
         }
         DataType::Struct(fields) => {
@@ -1466,9 +1466,14 @@ mod tests {
             OPTIONAL DOUBLE  double;
             OPTIONAL FLOAT   float;
             OPTIONAL BINARY  string (UTF8);
-            REQUIRED GROUP   bools (LIST) {
+            OPTIONAL GROUP   bools (LIST) {
                 REPEATED GROUP list {
                     OPTIONAL BOOLEAN element;
+                }
+            }
+            REQUIRED GROUP   bools_non_null (LIST) {
+                REPEATED GROUP list {
+                    REQUIRED BOOLEAN element;
                 }
             }
             OPTIONAL INT32   date       (DATE);
@@ -1506,6 +1511,11 @@ mod tests {
                 DataType::List(Box::new(Field::new("element", DataType::Boolean, true))),
                 true,
             ),
+            Field::new(
+                "bools_non_null",
+                DataType::List(Box::new(Field::new("element", DataType::Boolean, false))),
+                false,
+            ),
             Field::new("date", DataType::Date32(DateUnit::Day), true),
             Field::new("time_milli", DataType::Time32(TimeUnit::Millisecond), true),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
@@ -1531,7 +1541,7 @@ mod tests {
                             DataType::Int32,
                             true,
                         ))),
-                        true,
+                        false,
                     ),
                 ]),
                 false,

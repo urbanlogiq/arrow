@@ -696,6 +696,27 @@ macro_rules! hash_array {
     };
 }
 
+macro_rules! hash_array_cast {
+    ($array_type:ident, $column: ident, $f: ident, $hashes: ident, $random_state: ident, $as_type:tt) => {
+        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+        if array.null_count() == 0 {
+            for (i, hash) in $hashes.iter_mut().enumerate() {
+                let mut hasher = $random_state.build_hasher();
+                hasher.$f(array.value(i) as $as_type);
+                *hash = combine_hashes(hasher.finish(), *hash);
+            }
+        } else {
+            for (i, hash) in $hashes.iter_mut().enumerate() {
+                let mut hasher = $random_state.build_hasher();
+                if !array.is_null(i) {
+                    hasher.$f(array.value(i) as $as_type);
+                    *hash = combine_hashes(hasher.finish(), *hash);
+                }
+            }
+        }
+    };
+}
+
 /// Creates hash values for every element in the row based on the values in the columns
 fn create_hashes(arrays: &[ArrayRef], random_state: &RandomState) -> Result<Vec<u64>> {
     let rows = arrays[0].len();
@@ -744,6 +765,9 @@ fn create_hashes(arrays: &[ArrayRef], random_state: &RandomState) -> Result<Vec<
                     hashes,
                     random_state
                 );
+            }
+            DataType::Boolean => {
+                hash_array_cast!(BooleanArray, col, write_u8, hashes, random_state, u8);
             }
             DataType::Utf8 => {
                 let array = col.as_any().downcast_ref::<StringArray>().unwrap();
@@ -814,12 +838,12 @@ impl Stream for HashJoinStream {
 #[cfg(test)]
 mod tests {
     use crate::{
+        assert_batches_sorted_eq,
         physical_plan::{common, memory::MemoryExec},
-        test::{build_table_i32, columns, format_batch},
+        test::{build_table_i32, columns},
     };
 
     use super::*;
-    use std::collections::HashSet;
     use std::sync::Arc;
 
     fn build_table(
@@ -845,19 +869,6 @@ mod tests {
         HashJoinExec::try_new(left, right, &on, join_type)
     }
 
-    /// Asserts that the rows are the same, taking into account that their order
-    /// is irrelevant
-    fn assert_same_rows(result: &[String], expected: &[&str]) {
-        // convert to set since row order is irrelevant
-        let result = result.iter().cloned().collect::<HashSet<_>>();
-
-        let expected = expected
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<HashSet<_>>();
-        assert_eq!(result, expected);
-    }
-
     #[tokio::test]
     async fn join_inner_one() -> Result<()> {
         let left = build_table(
@@ -880,10 +891,16 @@ mod tests {
         let stream = join.execute(0).await?;
         let batches = common::collect(stream).await?;
 
-        let result = format_batch(&batches[0]);
-        let expected = vec!["2,5,8,20,80", "3,5,9,20,80", "1,4,7,10,70"];
-
-        assert_same_rows(&result, &expected);
+        let expected = vec![
+            "+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | c2 |",
+            "+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 70 |",
+            "| 2  | 5  | 8  | 20 | 80 |",
+            "| 3  | 5  | 9  | 20 | 80 |",
+            "+----+----+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())
     }
@@ -910,10 +927,17 @@ mod tests {
         let stream = join.execute(0).await?;
         let batches = common::collect(stream).await?;
 
-        let result = format_batch(&batches[0]);
-        let expected = vec!["2,5,8,20,5,80", "3,5,9,20,5,80", "1,4,7,10,4,70"];
+        let expected = vec![
+            "+----+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 4  | 70 |",
+            "| 2  | 5  | 8  | 20 | 5  | 80 |",
+            "| 3  | 5  | 9  | 20 | 5  | 80 |",
+            "+----+----+----+----+----+----+",
+        ];
 
-        assert_same_rows(&result, &expected);
+        assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())
     }
@@ -941,10 +965,17 @@ mod tests {
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
 
-        let result = format_batch(&batches[0]);
-        let expected = vec!["1,1,7,70", "2,2,8,80", "2,2,9,80"];
+        let expected = vec![
+            "+----+----+----+----+",
+            "| a1 | b2 | c1 | c2 |",
+            "+----+----+----+----+",
+            "| 1  | 1  | 7  | 70 |",
+            "| 2  | 2  | 8  | 80 |",
+            "| 2  | 2  | 9  | 80 |",
+            "+----+----+----+----+",
+        ];
 
-        assert_same_rows(&result, &expected);
+        assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())
     }
@@ -980,10 +1011,17 @@ mod tests {
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
 
-        let result = format_batch(&batches[0]);
-        let expected = vec!["1,1,7,70", "2,2,8,80", "2,2,9,80"];
+        let expected = vec![
+            "+----+----+----+----+",
+            "| a1 | b2 | c1 | c2 |",
+            "+----+----+----+----+",
+            "| 1  | 1  | 7  | 70 |",
+            "| 2  | 2  | 8  | 80 |",
+            "| 2  | 2  | 9  | 80 |",
+            "+----+----+----+----+",
+        ];
 
-        assert_same_rows(&result, &expected);
+        assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())
     }
@@ -1021,18 +1059,29 @@ mod tests {
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
 
-        let result = format_batch(&batches[0]);
-        let expected = vec!["1,4,7,10,70"];
-        assert_same_rows(&result, &expected);
+        let expected = vec![
+            "+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | c2 |",
+            "+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 70 |",
+            "+----+----+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
 
         // second part
         let stream = join.execute(1).await?;
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
-        let result = format_batch(&batches[0]);
-        let expected = vec!["2,5,8,30,90", "3,5,9,30,90"];
+        let expected = vec![
+            "+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | c2 |",
+            "+----+----+----+----+----+",
+            "| 2  | 5  | 8  | 30 | 90 |",
+            "| 3  | 5  | 9  | 30 | 90 |",
+            "+----+----+----+----+----+",
+        ];
 
-        assert_same_rows(&result, &expected);
+        assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())
     }
@@ -1059,10 +1108,16 @@ mod tests {
         let stream = join.execute(0).await?;
         let batches = common::collect(stream).await?;
 
-        let result = format_batch(&batches[0]);
-        let expected = vec!["1,4,7,10,70", "2,5,8,20,80", "3,7,9,NULL,NULL"];
-
-        assert_same_rows(&result, &expected);
+        let expected = vec![
+            "+----+----+----+----+----+",
+            "| a1 | b1 | c1 | a2 | c2 |",
+            "+----+----+----+----+----+",
+            "| 1  | 4  | 7  | 10 | 70 |",
+            "| 2  | 5  | 8  | 20 | 80 |",
+            "| 3  | 7  | 9  |    |    |",
+            "+----+----+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())
     }
@@ -1089,10 +1144,66 @@ mod tests {
         let stream = join.execute(0).await?;
         let batches = common::collect(stream).await?;
 
-        let result = format_batch(&batches[0]);
-        let expected = vec!["1,7,10,4,70", "2,8,20,5,80", "NULL,NULL,30,6,90"];
+        let expected = vec![
+            "+----+----+----+----+----+",
+            "| a1 | c1 | a2 | b1 | c2 |",
+            "+----+----+----+----+----+",
+            "|    |    | 30 | 6  | 90 |",
+            "| 1  | 7  | 10 | 4  | 70 |",
+            "| 2  | 8  | 20 | 5  | 80 |",
+            "+----+----+----+----+----+",
+        ];
 
-        assert_same_rows(&result, &expected);
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[test]
+    fn join_with_hash_collision() -> Result<()> {
+        let mut hashmap_left = HashMap::with_hasher(IdHashBuilder {});
+        let left = build_table_i32(
+            ("a", &vec![10, 20]),
+            ("x", &vec![100, 200]),
+            ("y", &vec![200, 300]),
+        );
+
+        let random_state = RandomState::new();
+
+        let hashes = create_hashes(&[left.columns()[0].clone()], &random_state)?;
+
+        // Create hash collisions
+        hashmap_left.insert(hashes[0], vec![0, 1]);
+        hashmap_left.insert(hashes[1], vec![0, 1]);
+
+        let right = build_table_i32(
+            ("a", &vec![10, 20]),
+            ("b", &vec![0, 0]),
+            ("c", &vec![30, 40]),
+        );
+
+        let left_data = JoinLeftData::new((hashmap_left, left));
+        let (l, r) = build_join_indexes(
+            &left_data,
+            &right,
+            JoinType::Inner,
+            &["a".to_string()],
+            &["a".to_string()],
+            &random_state,
+        )?;
+
+        let mut left_ids = UInt64Builder::new(0);
+        left_ids.append_value(0)?;
+        left_ids.append_value(1)?;
+
+        let mut right_ids = UInt32Builder::new(0);
+
+        right_ids.append_value(0)?;
+        right_ids.append_value(1)?;
+
+        assert_eq!(left_ids.finish(), l);
+
+        assert_eq!(right_ids.finish(), r);
 
         Ok(())
     }
