@@ -233,6 +233,128 @@ impl RecordBatch {
     pub fn columns(&self) -> &[ArrayRef] {
         &self.columns[..]
     }
+
+    pub fn try_empty(schema: SchemaRef) -> Result<Self> {
+        let columns = schema
+            .fields()
+            .iter()
+            .map(|f| -> ArrayRef {
+                match f.data_type() {
+                    DataType::Boolean => Arc::new(BooleanArray::from(Vec::<bool>::new())),
+                    DataType::Int8 => Arc::new(Int8Array::from(Vec::<i8>::new())),
+                    DataType::Int16 => Arc::new(Int16Array::from(Vec::<i16>::new())),
+                    DataType::Int32 => Arc::new(Int32Array::from(Vec::<i32>::new())),
+                    DataType::Int64 => Arc::new(Int64Array::from(Vec::<i64>::new())),
+                    DataType::UInt8 => Arc::new(UInt8Array::from(Vec::<u8>::new())),
+                    DataType::UInt16 => Arc::new(UInt16Array::from(Vec::<u16>::new())),
+                    DataType::UInt32 => Arc::new(UInt32Array::from(Vec::<u32>::new())),
+                    DataType::UInt64 => Arc::new(UInt64Array::from(Vec::<u64>::new())),
+                    DataType::Float16 => todo!(),
+                    DataType::Float32 => Arc::new(Float32Array::from(Vec::<f32>::new())),
+                    DataType::Float64 => Arc::new(Float64Array::from(Vec::<f64>::new())),
+                    DataType::Date32(_) => Arc::new(Date32Array::from(Vec::<i32>::new())),
+                    DataType::Date64(_) => Arc::new(Date64Array::from(Vec::<i64>::new())),
+                    DataType::Time32(TimeUnit::Second) => {
+                        Arc::new(Time32SecondArray::from(Vec::<i32>::new()))
+                    }
+                    DataType::Time32(TimeUnit::Millisecond) => {
+                        Arc::new(Time32MillisecondArray::from(Vec::<i32>::new()))
+                    }
+                    DataType::Time32(_) => unimplemented!(),
+                    DataType::Time64(TimeUnit::Microsecond) => {
+                        Arc::new(Time64MicrosecondArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::Time64(TimeUnit::Nanosecond) => {
+                        Arc::new(Time64NanosecondArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::Time64(_) => unimplemented!(),
+                    DataType::Duration(TimeUnit::Second) => {
+                        Arc::new(DurationSecondArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::Duration(TimeUnit::Millisecond) => {
+                        Arc::new(DurationMillisecondArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::Duration(TimeUnit::Microsecond) => {
+                        Arc::new(DurationMicrosecondArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::Duration(TimeUnit::Nanosecond) => {
+                        Arc::new(DurationNanosecondArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::Interval(IntervalUnit::YearMonth) => {
+                        Arc::new(IntervalYearMonthArray::from(Vec::<i32>::new()))
+                    }
+                    DataType::Interval(IntervalUnit::DayTime) => {
+                        Arc::new(IntervalDayTimeArray::from(Vec::<i64>::new()))
+                    }
+                    DataType::LargeBinary => {
+                        Arc::new(LargeBinaryArray::from(Vec::<&[u8]>::new()))
+                    }
+                    DataType::Binary => Arc::new(BinaryArray::from(Vec::<&[u8]>::new())),
+                    DataType::FixedSizeBinary(_) => {
+                        Arc::new(FixedSizeBinaryArray::from(Vec::<Vec<u8>>::new()))
+                    }
+                    DataType::Utf8 => Arc::new(StringArray::from(Vec::<&str>::new())),
+                    DataType::LargeUtf8 => {
+                        Arc::new(LargeStringArray::from(Vec::<&str>::new()))
+                    }
+                    DataType::Null => Arc::new(NullArray::new(0)),
+                    DataType::FixedSizeList(_, _) => {
+                        let array_data = ArrayData::builder(f.data_type().clone())
+                            .len(0)
+                            .add_buffer(Vec::new().into())
+                            .build();
+                        Arc::new(FixedSizeListArray::from(array_data))
+                    }
+                    DataType::LargeList(_) => {
+                        let array_data = ArrayData::builder(f.data_type().clone())
+                            .len(0)
+                            .add_buffer(Vec::new().into())
+                            .build();
+                        Arc::new(LargeListArray::from(array_data))
+                    }
+                    DataType::List(_) => {
+                        let array_data = ArrayData::builder(f.data_type().clone())
+                            .len(0)
+                            .add_buffer(Vec::new().into())
+                            .build();
+                        Arc::new(ListArray::from(array_data))
+                    }
+                    DataType::Struct(_) => {
+                        let array_data =
+                            ArrayData::builder(f.data_type().clone()).len(0).build();
+                        Arc::new(StructArray::from(array_data))
+                    }
+                    DataType::Union(_) => {
+                        let array_data =
+                            ArrayData::builder(f.data_type().clone()).len(0).build();
+                        Arc::new(UnionArray::from(array_data))
+                    }
+                    DataType::Decimal(_, _) => {
+                        let array_data = ArrayData::builder(f.data_type().clone())
+                            .len(0)
+                            .add_buffer(Vec::new().into())
+                            .build();
+                        Arc::new(DecimalArray::from(array_data))
+                    }
+                    DataType::Dictionary(_, _) => todo!(),
+                    DataType::Timestamp(TimeUnit::Second, tz) => {
+                        Arc::new(TimestampSecondArray::from_vec(vec![], tz.clone()))
+                    }
+                    DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                        Arc::new(TimestampMillisecondArray::from_vec(vec![], tz.clone()))
+                    }
+                    DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                        Arc::new(TimestampMicrosecondArray::from_vec(vec![], tz.clone()))
+                    }
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                        Arc::new(TimestampNanosecondArray::from_vec(vec![], tz.clone()))
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Self::try_new(schema, columns)
+    }
 }
 
 /// Options that control the behaviour used when creating a [`RecordBatch`].

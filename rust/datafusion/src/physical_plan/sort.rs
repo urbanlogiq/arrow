@@ -142,6 +142,10 @@ fn sort_batches(
     schema: &SchemaRef,
     expr: &[PhysicalSortExpr],
 ) -> ArrowResult<RecordBatch> {
+    if batches.is_empty() {
+        return RecordBatch::try_empty(schema.clone());
+    }
+
     // combine all record batches into one for each column
     let combined_batch = RecordBatch::try_new(
         schema.clone(),
