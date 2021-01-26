@@ -27,7 +27,7 @@ use super::{
     ArrayRef,
 };
 use crate::datatypes::ArrowNativeType;
-use crate::datatypes::DataType;
+use crate::datatypes::*;
 
 /// trait declaring an offset size, relevant for i32 vs i64 array types.
 pub trait OffsetSizeTrait: ArrowNativeType + Num + Ord + std::ops::AddAssign {
@@ -238,13 +238,16 @@ impl From<ArrayDataRef> for FixedSizeListArray {
         let values = make_array(data.child_data()[0].clone());
         let length = match data.data_type() {
             DataType::FixedSizeList(_, len) => {
-                // check that child data is multiple of length
-                assert_eq!(
-                    values.len() % *len as usize,
-                    0,
-                    "FixedSizeListArray child array length should be a multiple of {}",
-                    len
-                );
+                if *len > 0 {
+                    // check that child data is multiple of length
+                    assert_eq!(
+                        values.len() % *len as usize,
+                        0,
+                        "FixedSizeListArray child array length should be a multiple of {}",
+                        len
+                    );
+                }
+
                 *len
             }
             _ => {
@@ -298,7 +301,7 @@ impl fmt::Debug for FixedSizeListArray {
 #[cfg(test)]
 mod tests {
     use crate::{
-        array::ArrayData, array::Int32Array, buffer::Buffer, datatypes::Field,
+        array::ArrayData, array::Int32Array, buffer::Buffer, datatypes::Field, memory,
         util::bit_util,
     };
 

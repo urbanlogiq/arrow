@@ -28,7 +28,7 @@ use crate::logical_plan::Operator;
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 use arrow::array::{
-    self, Array, BooleanBuilder, GenericStringArray, LargeStringArray,
+    self, Array, BooleanBuilder, GenericStringArray, LargeStringArray, NullArray,
     StringOffsetSizeTrait,
 };
 use arrow::compute;
@@ -1513,9 +1513,13 @@ impl PhysicalExpr for BinaryExpr {
             right_value.into_array(batch.num_rows()),
         );
 
-        let result: Result<ArrayRef> = if left.null_count() == left.len() {
+        let result: Result<ArrayRef> = if left
+            .as_any()
+            .downcast_ref::<NullArray>()
+            .is_some()
+        {
             Ok(left)
-        } else if right.null_count() == right.len() {
+        } else if right.as_any().downcast_ref::<NullArray>().is_some() {
             Ok(right)
         } else {
             match &self.op {
