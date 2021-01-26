@@ -62,10 +62,10 @@ pub fn parquet_to_arrow_schema(
         ))
     */
     parquet_to_arrow_schema_by_columns(
-            parquet_schema,
-            0..parquet_schema.columns().len(),
-            key_value_metadata,
-        )
+        parquet_schema,
+        0..parquet_schema.columns().len(),
+        key_value_metadata,
+    )
 }
 
 /// Convert parquet schema to arrow schema including optional metadata,
@@ -140,9 +140,9 @@ where
     // schema from the columns instead.
     // see: https://issues.apache.org/jira/browse/ARROW-11324
     /*metadata
-        .remove(super::ARROW_SCHEMA_META_KEY)
-        .map(|encoded| get_arrow_schema_from_metadata(&encoded))
-        .map_or(Ok(None), |v| v.map(Some))?;*/
+    .remove(super::ARROW_SCHEMA_META_KEY)
+    .map(|encoded| get_arrow_schema_from_metadata(&encoded))
+    .map_or(Ok(None), |v| v.map(Some))?;*/
 
     // add the Arrow metadata to the Parquet metadata
     if let Some(arrow_schema) = &arrow_schema_metadata {
